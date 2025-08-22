@@ -1,244 +1,299 @@
-"""Unit tests for the search API."""
+"""Unit tests for the filesystem indexer."""
 
 import os
+
+# Import the indexer module
 import sys
+import tempfile
+import time
+from unittest.mock import Mock, patch
 
-# Import the API module
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from main import SearchMode, SortOrder, app, build_search_query, escape_sql, format_size
-
-from unittest.mock import patch
-
+import pytest
 from faker import Faker
-from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from indexer import Config, FileIndexer
 
 fake = Faker()
-client = TestClient(app)
 
 
-class TestAPI:
-    """Test cases for Search API."""
+@pytest.fixture
+def config():
+    """Create test configuration."""
+    return Config(
+        manticore_url="http://localhost:9308/sql?mode=raw",
+        scan_roots=["/test/data"],
+        root_name="test",
+        excludes_file="/tmp/excludes.txt",
+        stability_sec=30,
+        batch_size=100,
+        log_level="INFO",
+    )
 
-    def test_health_check(self):
-        """Test health check endpoint."""
-        with patch("main.execute_sql") as mock_sql:
-            mock_sql.return_value = {"data": []}
-            response = client.get("/health")
-            assert response.status_code == 200
-            assert response.json()["status"] == "healthy"
 
-    def test_escape_sql(self):
-        """Test SQL escaping with backslash method."""
-        # Basic escaping
-        assert escape_sql("test") == "test"
-        assert escape_sql("test's") == "test\\'s"
-        assert escape_sql("test\\path") == "test\\\\path"
+@pytest.fixture
+def indexer(config):
+    """Create indexer instance."""
+    return FileIndexer(config)
 
-        # Complex cases with multiple quotes
-        assert escape_sql("'; DROP TABLE--") == "\\'; DROP TABLE--"
+
+class TestFileIndexer:
+    """Test cases for FileIndexer class."""
+
+    def test_compute_file_id(self, indexer):
+        """Test file ID computation."""
+        # Test that same dev/ino produces same ID
+        id1 = indexer._compute_file_id(1000, 2000)
+        id2 = indexer._compute_file_id(1000, 2000)
+        assert id1 == id2
+
+        # Test that different dev/ino produces different IDs
+        id3 = indexer._compute_file_id(1001, 2000)
+        assert id1 != id3
+
+    def test_escape_sql_string(self, indexer):
+        """Test SQL string escaping with complex cases."""
+        # Test single quotes
+        assert indexer._escape_sql_string("test's file") == "test\\'s file"
         assert (
-            escape_sql("Running 'nvm use x' should work")
+            indexer._escape_sql_string("Running 'nvm use x' should work")
             == "Running \\'nvm use x\\' should work"
         )
 
-        # Special characters
-        assert escape_sql("line1\nline2") == "line1\\nline2"
-        assert escape_sql("tab\there") == "tab\\there"
-        assert escape_sql("test\x00null") == "testnull"  # Null bytes removed
-
-        # Complex filename that was causing issues
-        problem_filename = (
-            "Running 'nvm use x' should create and change the 'current' symlink"
-        )
-        escaped = escape_sql(problem_filename)
+        # Test backslashes
         assert (
-            escaped
+            indexer._escape_sql_string("C:\\test\\file.txt") == "C:\\\\test\\\\file.txt"
+        )
+
+        # Test special characters
+        assert indexer._escape_sql_string("line1\nline2") == "line1\\nline2"
+        assert indexer._escape_sql_string("tab\there") == "tab\\there"
+
+        # Test complex case with multiple quotes
+        assert (
+            indexer._escape_sql_string(
+                "Running 'nvm use x' should create and change the 'current' symlink"
+            )
             == "Running \\'nvm use x\\' should create and change the \\'current\\' symlink"
         )
 
-    def test_format_size(self):
-        """Test size formatting."""
-        assert format_size(100) == "100.0 B"
-        assert format_size(1024) == "1.0 KB"
-        assert format_size(1024 * 1024) == "1.0 MB"
-        assert format_size(1024 * 1024 * 1024) == "1.0 GB"
+        # Test null bytes are removed
+        assert indexer._escape_sql_string("test\x00file") == "testfile"
 
-    def test_build_search_query_basic(self):
-        """Test basic query building."""
-        search_query, count_query = build_search_query(
-            q="test",
-            mode=SearchMode.SUBSTR,
-            ext=None,
-            dir=None,
-            mtime_from=None,
-            mtime_to=None,
-            size_min=None,
-            size_max=None,
-            sort=SortOrder.MTIME_DESC,
-            page=1,
-            per_page=50,
-        )
+    def test_is_excluded(self, indexer):
+        """Test exclusion pattern matching."""
+        indexer.excludes = ["*.log", "/tmp/**", "**/node_modules/**", ".git"]
 
-        assert "MATCH('@basename *test*')" in search_query
-        assert "ORDER BY mtime DESC" in search_query
-        assert "LIMIT 50 OFFSET 0" in search_query
-        assert "COUNT(*)" in count_query
+        assert indexer._is_excluded("test.log")
+        assert indexer._is_excluded("/tmp/file.txt")
+        assert indexer._is_excluded("project/node_modules/package.json")
+        assert indexer._is_excluded(".git")
+        assert not indexer._is_excluded("test.txt")
+        assert not indexer._is_excluded("src/main.py")
 
-    def test_build_search_query_with_special_chars(self):
-        """Test query building with special characters."""
-        # Test with query containing quotes
-        search_query, count_query = build_search_query(
-            q="file's name",
-            mode=SearchMode.SUBSTR,
-            ext=None,
-            dir="/path/with'quotes",
-            mtime_from=None,
-            mtime_to=None,
-            size_min=None,
-            size_max=None,
-            sort=SortOrder.MTIME_DESC,
-            page=1,
-            per_page=50,
-        )
+    def test_load_excludes(self, config):
+        """Test loading exclusion patterns from file."""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            f.write("# Comment\n")
+            f.write("*.tmp\n")
+            f.write("/cache/**\n")
+            f.write("\n")  # Empty line
+            f.write("*.bak\n")
+            excludes_file = f.name
 
-        # Check that quotes are properly escaped
-        assert "*file\\'s name*" in search_query or "*file's name*" in search_query
+        try:
+            config.excludes_file = excludes_file
+            indexer = FileIndexer(config)
+
+            assert "*.tmp" in indexer.excludes
+            assert "/cache/**" in indexer.excludes
+            assert "*.bak" in indexer.excludes
+            assert len(indexer.excludes) == 3
+        finally:
+            os.unlink(excludes_file)
+
+    @patch("requests.post")
+    def test_bulk_upsert(self, mock_post, indexer):
+        """Test bulk upsert to Manticore."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        rows = [
+            (
+                1,
+                "test",
+                "/path/file1.txt",
+                "file1.txt",
+                "txt",
+                "/path",
+                100,
+                1000000,
+                1000,
+                1000,
+                755,
+                123456,
+            ),
+            (
+                2,
+                "test",
+                "/path/file2.py",
+                "file2.py",
+                "py",
+                "/path",
+                200,
+                2000000,
+                1000,
+                1000,
+                755,
+                123456,
+            ),
+        ]
+        indexer._bulk_upsert(rows)
+
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+
+        # Verify the correct URL was called
+        assert args[0] == indexer.config.manticore_url
+
+        # Extract the SQL from either JSON or form-encoded data
+        if "json" in kwargs:
+            query = kwargs["json"]["query"]
+        else:
+            # kwargs["data"] is a URL-encoded string like "query=REPLACE+INTO..."
+            query = kwargs["data"]
+        assert "REPLACE INTO files" in query or "REPLACE+INTO+files" in query
+
+    @patch("requests.post")
+    def test_bulk_upsert_with_special_chars(self, mock_post, indexer):
+        """Test bulk upsert with filenames containing special characters."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Test with problematic filename
+        rows = [
+            (
+                1,
+                "test",
+                "/data/test/Running 'nvm use x' should create and change the 'current' symlink",
+                "Running 'nvm use x' should create and change the 'current' symlink",
+                "",
+                "/data/test",
+                100,
+                1000000,
+                1000,
+                1000,
+                755,
+                123456,
+            )
+        ]
+        indexer._bulk_upsert(rows)
+
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+
+        # The query should contain escaped quotes using backslash
+        # When URL-encoded: \' becomes %5C%27 (backslash is %5C, quote is %27)
+        query_data = kwargs.get("data", "")
+        assert "%5C%27nvm+use+x%5C%27" in query_data or "\\'nvm use x\\'" in query_data
+        assert "%5C%27current%5C%27" in query_data or "\\'current\\'" in query_data
+
+    @patch("requests.post")
+    def test_sweep_deletions(self, mock_post, indexer):
+        """Test deletion sweep."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {"data": [{"deleted": 5}]}
+        mock_post.return_value = mock_response
+
+        scan_id = int(time.time())
+        indexer._sweep_deletions(scan_id)
+
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+
+        if "json" in kwargs:
+            query = kwargs["json"]["query"]
+        else:
+            query = kwargs["data"]
         assert (
-            "/path/with\\'quotes" in search_query or "/path/with'quotes" in search_query
+            f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query
+            or f"DELETE+FROM+files+WHERE+root%3D%27test%27+AND+seen_at+%3C+{scan_id}"
+            in query
+            or f"DELETE FROM files WHERE root=\\'test\\' AND seen_at < {scan_id}"
+            in query
         )
+        assert indexer.stats["files_deleted"] == 5
 
-    def test_build_search_query_with_filters(self):
-        """Test query building with filters."""
-        search_query, count_query = build_search_query(
-            q="doc",
-            mode=SearchMode.REGEX,
-            ext=["pdf", "docx"],
-            dir="/home/user",
-            mtime_from=1000000,
-            mtime_to=2000000,
-            size_min=1024,
-            size_max=1048576,
-            sort=SortOrder.SIZE_DESC,
-            page=2,
-            per_page=25,
-        )
+    def test_scan_directory(self, indexer):
+        """Test directory scanning."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create test files
+            test_files = []
+            for i in range(5):
+                filepath = os.path.join(tmpdir, f"test{i}.txt")
+                with open(filepath, "w") as f:
+                    f.write(f"content {i}")
+                # Set mtime to past to avoid stability window
+                os.utime(filepath, (time.time() - 100, time.time() - 100))
+                test_files.append(filepath)
 
-        assert "REGEX(basename, 'doc')" in search_query
-        assert (
-            "ext IN (" in search_query
-            and "pdf" in search_query
-            and "docx" in search_query
-        )
-        assert "dirpath LIKE " in search_query and "/home/user%" in search_query
-        assert "mtime >= 1000000" in search_query
-        assert "mtime <= 2000000" in search_query
-        assert "size >= 1024" in search_query
-        assert "size <= 1048576" in search_query
-        assert "ORDER BY size DESC" in search_query
-        assert "LIMIT 25 OFFSET 25" in search_query
+            # Create subdirectory with files
+            subdir = os.path.join(tmpdir, "subdir")
+            os.mkdir(subdir)
+            subfile = os.path.join(subdir, "subfile.py")
+            with open(subfile, "w") as f:
+                f.write("python code")
+            os.utime(subfile, (time.time() - 100, time.time() - 100))
 
-    @patch("main.execute_sql")
-    def test_search_endpoint(self, mock_sql):
-        """Test search endpoint."""
-        mock_sql.side_effect = [
-            {"data": [{"total": 2}]},  # Count query
-            {
-                "data": [  # Search query
-                    {
-                        "path": "/test/file1.txt",
-                        "basename": "file1.txt",
-                        "ext": "txt",
-                        "dirpath": "/test",
-                        "size": 1024,
-                        "mtime": 1700000000,
-                    },
-                    {
-                        "path": "/test/file2.pdf",
-                        "basename": "file2.pdf",
-                        "ext": "pdf",
-                        "dirpath": "/test",
-                        "size": 2048,
-                        "mtime": 1700000100,
-                    },
-                ]
-            },
-        ]
+            # Scan directory
+            scan_id = int(time.time())
+            results = list(indexer._scan_directory(tmpdir, scan_id))
 
-        response = client.get("/search?q=file&mode=substr")
-        assert response.status_code == 200
+            # Verify results
+            assert len(results) == 6  # 5 files + 1 subfile
 
-        data = response.json()
-        assert data["total"] == 2
-        assert len(data["results"]) == 2
-        assert data["results"][0]["basename"] == "file1.txt"
-        assert data["results"][1]["basename"] == "file2.pdf"
+            # Check file metadata
+            basenames = [r[3] for r in results]
+            assert "test0.txt" in basenames
+            assert "subfile.py" in basenames
 
-    @patch("main.execute_sql")
-    def test_search_with_special_filename(self, mock_sql):
-        """Test search with special characters in filenames."""
-        mock_sql.side_effect = [
-            {"data": [{"total": 1}]},  # Count query
-            {
-                "data": [  # Search query
-                    {
-                        "path": "/test/Running 'nvm use x' should work.txt",
-                        "basename": "Running 'nvm use x' should work.txt",
-                        "ext": "txt",
-                        "dirpath": "/test",
-                        "size": 1024,
-                        "mtime": 1700000000,
-                    }
-                ]
-            },
-        ]
+            # Check extensions
+            extensions = [r[4] for r in results]
+            assert "txt" in extensions
+            assert "py" in extensions
 
-        response = client.get("/search?q=nvm&mode=substr")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["total"] == 1
-        assert data["results"][0]["basename"] == "Running 'nvm use x' should work.txt"
-
-    @patch("main.execute_sql")
-    def test_stats_endpoint(self, mock_sql):
-        """Test stats endpoint."""
-        mock_sql.side_effect = [
-            {"data": [{"total": 1000}]},  # Total files
-            {
-                "data": [{"total_size": 1073741824, "last_scan": 1700000000}]
-            },  # Size and scan
-            {
-                "data": [  # Per-root stats
-                    {"root": "data", "count": 800, "size": 900000000},
-                    {"root": "archive", "count": 200, "size": 173741824},
-                ]
-            },
-        ]
-
-        response = client.get("/stats")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["total_files"] == 1000
-        assert data["total_size"] == 1073741824
-        assert data["last_scan"] == 1700000000
-        assert len(data["roots"]) == 2
-
-    @patch("main.execute_sql")
-    def test_suggest_endpoint(self, mock_sql):
-        """Test extension suggestions endpoint."""
-        mock_sql.return_value = {
-            "data": [
-                {"ext": "txt", "count": 500},
-                {"ext": "pdf", "count": 300},
-                {"ext": "py", "count": 200},
+    def test_scan_directory_with_special_filenames(self, indexer):
+        """Test scanning directory with special characters in filenames."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create files with special characters
+            special_files = [
+                "file with spaces.txt",
+                "file's with apostrophe.txt",
+                "file-with-dashes.txt",
+                "file_with_underscores.txt",
             ]
-        }
 
-        response = client.get("/suggest")
-        assert response.status_code == 200
+            for filename in special_files:
+                filepath = os.path.join(tmpdir, filename)
+                with open(filepath, "w") as f:
+                    f.write("test content")
+                # Set mtime to past to avoid stability window
+                os.utime(filepath, (time.time() - 100, time.time() - 100))
 
-        data = response.json()
-        assert len(data["extensions"]) == 3
-        assert data["extensions"][0]["ext"] == "txt"
-        assert data["extensions"][0]["count"] == 500
+            # Scan directory
+            scan_id = int(time.time())
+            results = list(indexer._scan_directory(tmpdir, scan_id))
+
+            # Verify results
+            assert len(results) == len(special_files)
+
+            # Check that all special filenames were found
+            basenames = [r[3] for r in results]
+            for filename in special_files:
+                assert filename in basenames
