@@ -99,18 +99,16 @@ class FileIndexer:
             seen_at bigint
         ) min_infix_len='2'
         """
-        
+
         try:
             response = requests.post(
-                self.config.manticore_url,
-                json={"query": create_sql},
-                timeout=30
+                self.config.manticore_url, json={"query": create_sql}, timeout=30
             )
             if response.status_code != 200:
                 logger.warning(
                     "table_create_response",
                     status=response.status_code,
-                    body=response.text
+                    body=response.text,
                 )
             else:
                 logger.info("table_ensured")
@@ -269,29 +267,29 @@ class FileIndexer:
             # Log the query in debug mode
             if self.config.log_level == "DEBUG":
                 logger.debug("executing_sql", sql_preview=sql[:500])
-            
+
             response = requests.post(
                 self.config.manticore_url, json={"query": sql}, timeout=120
             )
-            
+
             # Check response and log details if error
             if response.status_code != 200:
                 error_detail = {
                     "status_code": response.status_code,
                     "error_body": response.text,
                     "sql_preview": sql[:500],
-                    "first_row": rows[0] if rows else None
+                    "first_row": rows[0] if rows else None,
                 }
                 logger.error("manticore_sql_error", **error_detail)
                 response.raise_for_status()
-            
+
             self.stats["files_indexed"] += len(rows)
             logger.info("batch_indexed", count=len(rows))
-            
+
         except requests.exceptions.HTTPError as e:
             # Enhanced error logging with response body
             error_msg = f"{str(e)}"
-            if hasattr(e.response, 'text'):
+            if hasattr(e.response, "text"):
                 error_msg += f" - Response: {e.response.text}"
             logger.error("bulk_upsert_failed", error=error_msg, count=len(rows))
             raise
@@ -310,12 +308,12 @@ class FileIndexer:
             response = requests.post(
                 self.config.manticore_url, json={"query": sql}, timeout=600
             )
-            
+
             if response.status_code != 200:
                 logger.error(
                     "deletion_sweep_error",
                     status_code=response.status_code,
-                    error_body=response.text
+                    error_body=response.text,
                 )
                 response.raise_for_status()
 
