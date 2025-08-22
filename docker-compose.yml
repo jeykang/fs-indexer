@@ -33,7 +33,7 @@ services:
     networks:
       - fs-indexer
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
       interval: 30s
       timeout: 3s
       retries: 10
@@ -50,7 +50,7 @@ services:
         echo "Waiting for Manticore to be ready...";
         until curl -sf http://manticore:9308/cli?cmd=SHOW%20TABLES; do sleep 2; done;
         echo "Creating files table...";
-        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json"
+        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json" \
              -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len='2'\"}" &&
         echo "Table created successfully" || echo "Table creation failed"
       '
