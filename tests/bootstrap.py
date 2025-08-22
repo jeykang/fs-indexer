@@ -10,17 +10,23 @@ import urllib.parse
 
 
 def wait_for_manticore(url="http://manticore:9308", retries=30):
-    """Wait for Manticore to be ready."""
+    """Wait for Manticore to be ready by successfully executing SHOW TABLES."""
     print("Waiting for Manticore to be ready...")
     for i in range(retries):
         try:
-            req = urllib.request.Request(f"{url}/cli?cmd=SHOW%20TABLES")
+            # Use /sql?mode=raw for SHOW TABLES
+            data = urllib.parse.urlencode({"query": "SHOW TABLES"}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{url}/sql?mode=raw",
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
             with urllib.request.urlopen(req, timeout=5) as response:
                 if response.status == 200:
                     print("Manticore is ready!")
                     return True
-        except (urllib.error.URLError, urllib.error.HTTPError) as _:
-            print(f"Attempt {i+1}/{retries}: Manticore not ready yet...")
+        except Exception:
+            print(f"Attempt {i + 1}/{retries}: Manticore not ready yet...")
             time.sleep(2)
     return False
 
@@ -77,16 +83,22 @@ def create_table(url="http://manticore:9308"):
 
 
 def verify_table(url="http://manticore:9308"):
-    """Verify the table was created."""
+    """Verify that the files table exists by reading SHOW TABLES results."""
     print("Verifying table creation...")
-
-    req = urllib.request.Request(f"{url}/cli?cmd=SHOW%20TABLES")
     try:
+        data = urllib.parse.urlencode({"query": "SHOW TABLES"}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{url}/sql?mode=raw",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
         with urllib.request.urlopen(req, timeout=10) as response:
             result = response.read().decode("utf-8")
-            print(f"Tables: {result}")
-
-            if "files" in result:
+            print(f"Tables raw response: {result}")
+            result_json = json.loads(result)
+            # result_json is a list of result sets; take the first
+            rows = result_json[0].get("data", [])
+            if any(row.get("Index") == "files" for row in rows):
                 print("✓ Table 'files' exists!")
                 return True
             else:
