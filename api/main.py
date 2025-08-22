@@ -94,10 +94,10 @@ class StatsResponse(BaseModel):
 
 def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     query_strip = query.lstrip().upper()
-    base_url = MANTICORE_URL.split("?")[0]  # drop any existing query params
     try:
-        if query_strip.startswith("SHOW "):
-            # Always send SHOW commands to /sql?mode=raw
+        # If the configured URL itself ends with ?mode=raw, then we must send all queries as form data
+        if "mode=raw" in MANTICORE_URL:
+            base_url = MANTICORE_URL.split("?")[0]
             raw_url = f"{base_url}?mode=raw"
             data = urllib.parse.urlencode({"query": query})
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -109,15 +109,30 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
             if isinstance(result, list):
                 result = result[0]
             return result
-        else:
-            # Normal SELECTs go to /sql
+
+        # Otherwise, detect SHOW and similar admin commands and route them to raw
+        if query_strip.startswith("SHOW "):
+            base_url = MANTICORE_URL.split("?")[0]
+            raw_url = f"{base_url}?mode=raw"
+            data = urllib.parse.urlencode({"query": query})
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
             response = requests.post(
-                base_url,
-                json={"query": query},
-                timeout=timeout,
+                raw_url, data=data, headers=headers, timeout=timeout
             )
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            if isinstance(result, list):
+                result = result[0]
+            return result
+
+        # For normal SELECT statements against /sql, send JSON
+        response = requests.post(
+            MANTICORE_URL,
+            json={"query": query},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
