@@ -100,10 +100,12 @@ class FileIndexer:
             # /sql endpoint accepts JSON with `query` only for SELECT
             return requests.post(url, json={"query": sql}, timeout=timeout)
 
-    def _ensure_table_exists(self) -> None:
-        """Ensure the files table exists in Manticore."""
+    def _ensure_table_exists(self):
+        drop_sql = "DROP TABLE IF EXISTS files"
+        self._send_sql(drop_sql, timeout=30)
+
         create_sql = """
-        CREATE TABLE IF NOT EXISTS files (
+        CREATE TABLE files (
             id bigint,
             root string,
             path string stored indexed,
