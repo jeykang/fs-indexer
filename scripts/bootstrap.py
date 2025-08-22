@@ -35,6 +35,16 @@ def create_table(url="http://manticore:9308"):
     """Create the files table."""
     print("Creating files table...")
 
+    # Always drop the table to pick up schema changes
+    drop = "DROP TABLE IF EXISTS files"
+    encoded_drop = urllib.parse.urlencode({"query": drop}).encode("utf-8")
+    req_drop = urllib.request.Request(
+        f"{url}/sql?mode=raw",
+        data=encoded_drop,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    urllib.request.urlopen(req_drop, timeout=30).read()
+
     # Note: No semicolon at the end
     sql = (
         "CREATE TABLE IF NOT EXISTS files ("
