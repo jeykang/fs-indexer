@@ -94,10 +94,10 @@ class StatsResponse(BaseModel):
 
 def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     query_strip = query.lstrip().upper()
+    base_url = MANTICORE_URL.split("?")[0]  # drop any existing query params
     try:
         if query_strip.startswith("SHOW "):
             # Always send SHOW commands to /sql?mode=raw
-            base_url = MANTICORE_URL.split("?")[0]  # drop any existing query params
             raw_url = f"{base_url}?mode=raw"
             data = urllib.parse.urlencode({"query": query})
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -111,7 +111,6 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
             return result
         else:
             # Normal SELECTs go to /sql
-            base_url = MANTICORE_URL.split("?")[0]  # drop any existing query params
             response = requests.post(
                 base_url,
                 json={"query": query},
