@@ -18,7 +18,7 @@ from pydantic import BaseModel
 import urllib.parse
 
 # Configuration
-MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql?mode=raw")
+MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql")
 DEFAULT_PAGE_SIZE = int(os.environ.get("DEFAULT_PAGE_SIZE", "50"))
 MAX_PAGE_SIZE = int(os.environ.get("MAX_PAGE_SIZE", "500"))
 
@@ -93,22 +93,17 @@ class StatsResponse(BaseModel):
 
 
 def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
-    url = MANTICORE_URL
     try:
-        if url.rstrip("/").endswith("/sql?mode=raw"):
-            data = urllib.parse.urlencode({"query": query})
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            response = requests.post(url, data=data, headers=headers, timeout=timeout)
-        else:
-            response = requests.post(url, json={"query": query}, timeout=timeout)
+        response = requests.post(
+            MANTICORE_URL,
+            json={"query": query},
+            timeout=timeout,
+        )
         response.raise_for_status()
-        result = response.json()
-        # Raw mode returns a list of result sets; take the first one
-        if isinstance(result, list):
-            result = result[0]
-        return result
+        return response.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
 
 
 def escape_sql(value: str) -> str:
@@ -225,7 +220,7 @@ def build_search_query(
 async def health_check():
     """Health check endpoint."""
     try:
-        _ = execute_sql("SHOW TABLES", timeout=5)
+        _ = execute_sql("SELECT 1", timeout=5)
         return {"status": "healthy", "manticore": "connected"}
     except Exception:
         raise HTTPException(status_code=503, detail="Service unhealthy")
