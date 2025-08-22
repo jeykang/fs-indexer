@@ -179,12 +179,12 @@ def build_search_query(
 
     # Search query
     if q:
-        if mode == SearchMode.REGEX or mode == SearchMode.SUBSTR:
+        if mode == SearchMode.REGEX:
             # Use REGEX function for RE2 pattern matching
             conditions.append(f"REGEX(basename_raw, '{escape_regex(q)}')")
-        # elif mode == SearchMode.SUBSTR:
-        #     pattern = f".*{escape_regex(q)}.*"
-        #     conditions.append(f"REGEX(basename_raw, '{pattern}')")
+        elif mode == SearchMode.SUBSTR:
+            escaped_q = escape_sql(q)
+            conditions.append(f"MATCH('@basename *{escaped_q}*')")
         else:  # PLAIN
             # Standard tokenized match
             escaped_q = escape_sql(q)
@@ -231,7 +231,7 @@ def build_search_query(
 
     # Build queries
     search_query = (
-        f"SELECT path, basename, ext, dirpath, size, mtime "
+        f"SELECT path, basename, basename_raw, ext, dirpath, size, mtime "
         f"FROM files "
         f"WHERE {where_clause} "
         f"{order_clause} "
@@ -314,6 +314,7 @@ async def search_files(
                 FileResult(
                     path=row.get("path", ""),
                     basename=row.get("basename", ""),
+                    basename_raw=row.get("basename_raw", ""),
                     ext=row.get("ext", ""),
                     dirpath=row.get("dirpath", ""),
                     size=row.get("size", 0),

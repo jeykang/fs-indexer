@@ -110,7 +110,7 @@ class FileIndexer:
             root string,
             path string stored indexed,
             basename text stored indexed,
-            basename_raw string indexed,
+            basename_raw string attribute indexed,
             ext string,
             dirpath string stored,
             size bigint,
