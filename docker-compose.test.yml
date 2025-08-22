@@ -38,7 +38,7 @@ services:
       - fs-indexer-test
     command: >
       sh -c '
-        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json"
+        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json" \
              -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len='2'\"}"
       '
     restart: "no"
