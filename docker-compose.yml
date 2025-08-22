@@ -63,6 +63,8 @@ services:
     depends_on:
       manticore:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       - MANTICORE_URL=http://manticore:9308/sql
       - SCAN_ROOTS=${SCAN_ROOTS:-/data}
@@ -100,6 +102,8 @@ services:
     depends_on:
       manticore:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       - MANTICORE_URL=http://manticore:9308/sql
       - DEFAULT_PAGE_SIZE=${DEFAULT_PAGE_SIZE:-50}
