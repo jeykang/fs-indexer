@@ -5,6 +5,7 @@ echo "Starting E2E tests..."
 
 API_URL="${API_URL:-http://localhost:8080}"
 WEB_URL="${WEB_URL:-http://localhost:8081}"
+ENV_FILE="${ENV_FILE:-.env.e2e}"
 
 # Wait for services to be ready
 echo "Waiting for services..."
@@ -13,7 +14,7 @@ echo "API is ready"
 
 # Run indexer
 echo "Running indexer..."
-docker compose -f docker-compose.test.yml run --rm indexer
+docker compose --env-file ${ENV_FILE} -f docker-compose.test.yml run --rm indexer
 
 # Test 1: Basic search
 echo "Test 1: Basic search"

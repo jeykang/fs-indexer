@@ -61,7 +61,10 @@ services:
       - BATCH_SIZE=100
       - LOG_LEVEL=DEBUG
     volumes:
-      - ./tests/integration/test_data:/data:ro
+      - type: bind
+        source: ${HOST_PATH:-./tests/integration/test_data}
+        target: /data
+        read_only: true
       - ./config:/app/config:ro
     networks:
       - fs-indexer-test

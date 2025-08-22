@@ -312,7 +312,7 @@ jobs:
       - name: Run E2E tests
         run: |
           chmod +x tests/e2e/test_e2e.sh
-          ./tests/e2e/test_e2e.sh
+          ENV_FILE=.env.e2e ./tests/e2e/test_e2e.sh
 
       - name: Clean up
         if: always()
