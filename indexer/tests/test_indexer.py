@@ -90,7 +90,36 @@ class TestFileIndexer:
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        rows = [...]
+        rows = [
+            (
+                1,
+                "test",
+                "/path/file1.txt",
+                "file1.txt",
+                "txt",
+                "/path",
+                100,
+                1000000,
+                1000,
+                1000,
+                755,
+                123456,
+            ),
+            (
+                2,
+                "test",
+                "/path/file2.py",
+                "file2.py",
+                "py",
+                "/path",
+                200,
+                2000000,
+                1000,
+                1000,
+                755,
+                123456,
+            ),
+        ]
         indexer._bulk_upsert(rows)
 
         assert mock_post.called
