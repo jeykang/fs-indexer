@@ -24,7 +24,7 @@ services:
       - "9308:9308"
       - "9306:9306"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
       interval: 5s
       timeout: 3s
       retries: 10
