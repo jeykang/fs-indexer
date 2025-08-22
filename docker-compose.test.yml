@@ -38,17 +38,37 @@ services:
       - fs-indexer-test
     command: >
       sh -c '
-        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json" \
-             -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len='2'\"}"
+        echo "Waiting for Manticore to be ready..." &&
+        sleep 5 &&
+        echo "Creating files table..." &&
+        response=$$(curl -sX POST http://manticore:9308/sql \
+          -H "Content-Type: application/json" \
+          -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len=2\"}") &&
+        echo "Create table response: $$response" &&
+        echo "Verifying table creation..." &&
+        tables=$$(curl -s "http://manticore:9308/cli?cmd=SHOW%20TABLES") &&
+        echo "Tables: $$tables" &&
+        if echo "$$tables" | grep -q "files"; then
+          echo "Table created successfully";
+          exit 0;
+        else
+          echo "Failed to create table!";
+          exit 1;
+        fi
       '
     restart: "no"
 
   indexer:
+    build: 
+      context: ./indexer
+      dockerfile: Dockerfile
     image: local/fs-indexer-indexer:test
     container_name: fs-indexer-test
     depends_on:
       manticore:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       - MANTICORE_URL=http://manticore:9308/sql
       - SCAN_ROOTS=/data
@@ -64,11 +84,16 @@ services:
       - fs-indexer-test
 
   search-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
     image: local/fs-indexer-api:test
     container_name: fs-search-api-test
     depends_on:
       manticore:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       - MANTICORE_URL=http://manticore:9308/sql
       - DEFAULT_PAGE_SIZE=10
@@ -85,6 +110,9 @@ services:
       retries: 5
 
   web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
     image: local/fs-indexer-web:test
     container_name: fs-web-test
     depends_on:
