@@ -101,7 +101,9 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
             raw_url = f"{base_url}?mode=raw"
             data = urllib.parse.urlencode({"query": query})
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            response = requests.post(raw_url, data=data, headers=headers, timeout=timeout)
+            response = requests.post(
+                raw_url, data=data, headers=headers, timeout=timeout
+            )
             response.raise_for_status()
             result = response.json()
             if isinstance(result, list):
@@ -119,7 +121,6 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
             return response.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
 
 
 def escape_sql(value: str) -> str:
