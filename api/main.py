@@ -105,7 +105,6 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 
-
 def escape_sql(value: str) -> str:
     """Escape SQL string values."""
     return value.replace("'", "''").replace("\\", "\\\\")
