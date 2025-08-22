@@ -198,8 +198,8 @@ class TestFileIndexer:
 
         # The query should contain escaped quotes using backslash
         query_data = kwargs.get("data", "")
-        assert "\\'nvm use x\\'" in query_data or "%27nvm+use+x%27" in query_data
-        assert "\\'current\\'" in query_data or "%27current%27" in query_data
+        assert "%5C%27nvm+use+x%5C%27" in query_data or "\\'nvm use x\\'" in query_data
+        assert "%5C%27current%5C%27" in query_data or "\\'current\\'" in query_data
 
     @patch("requests.post")
     def test_sweep_deletions(self, mock_post, indexer):
