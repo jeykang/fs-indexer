@@ -15,8 +15,6 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-import urllib.parse
-
 # Configuration
 MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql")
 DEFAULT_PAGE_SIZE = int(os.environ.get("DEFAULT_PAGE_SIZE", "50"))
