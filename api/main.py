@@ -94,11 +94,17 @@ class StatsResponse(BaseModel):
 
 def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     query_strip = query.lstrip().upper()
+    base_url = MANTICORE_URL.split("?")[0]  # e.g. http://manticore:9308/sql
+    select_url = base_url
+    raw_url = f"{base_url}?mode=raw"
     try:
-        # If the configured URL itself ends with ?mode=raw, then we must send all queries as form data
-        if "mode=raw" in MANTICORE_URL:
-            base_url = MANTICORE_URL.split("?")[0]
-            raw_url = f"{base_url}?mode=raw"
+        if query_strip.startswith("SELECT"):
+            # Send SELECTs to /sql in JSON format
+            response = requests.post(select_url, json={"query": query}, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        else:
+            # All other queries go to /sql?mode=raw in form-data format
             data = urllib.parse.urlencode({"query": query})
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
             response = requests.post(
@@ -106,33 +112,10 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
             )
             response.raise_for_status()
             result = response.json()
+            # /sql?mode=raw returns a list; unwrap it
             if isinstance(result, list):
                 result = result[0]
             return result
-
-        # Otherwise, detect SHOW and similar admin commands and route them to raw
-        if query_strip.startswith("SHOW "):
-            base_url = MANTICORE_URL.split("?")[0]
-            raw_url = f"{base_url}?mode=raw"
-            data = urllib.parse.urlencode({"query": query})
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            response = requests.post(
-                raw_url, data=data, headers=headers, timeout=timeout
-            )
-            response.raise_for_status()
-            result = response.json()
-            if isinstance(result, list):
-                result = result[0]
-            return result
-
-        # For normal SELECT statements against /sql, send JSON
-        response = requests.post(
-            MANTICORE_URL,
-            json={"query": query},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return response.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
