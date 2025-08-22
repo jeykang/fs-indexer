@@ -103,8 +103,8 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     try:
         # Always send the query as a form field; requests will
         # encode it properly and set the Content-Type header.
-        # response = requests.post(url, data={"query": query}, timeout=timeout)
-        response = requests.post(url, json={"query": query}, timeout=timeout)
+        response = requests.post(url, data={"query": query}, timeout=timeout)
+        # response = requests.post(url, json={"query": query}, timeout=timeout)
         if response.status_code != 200:
             # Debug output: show exactly what Manticore returned
             print(f"SQL error: status={response.status_code}, url={url}, query={query}")
