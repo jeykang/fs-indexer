@@ -39,21 +39,15 @@ services:
       retries: 10
 
   bootstrap:
-    image: curlimages/curl:8.11.0
+    image: python:3.12-slim
     depends_on:
       manticore:
         condition: service_healthy
     networks:
       - fs-indexer
-    command: >
-      sh -c '
-        echo "Waiting for Manticore to be ready...";
-        until curl -sf http://manticore:9308/cli?cmd=SHOW%20TABLES; do sleep 2; done;
-        echo "Creating files table...";
-        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json" \
-             -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len='2'\"}" &&
-        echo "Table created successfully" || echo "Table creation failed"
-      '
+    volumes:
+      - ./scripts/bootstrap.py:/bootstrap.py:ro
+    command: ["python", "/bootstrap.py"]
     restart: "no"
 
   indexer:

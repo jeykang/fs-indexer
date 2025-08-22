@@ -37,25 +37,25 @@ services:
     networks:
       - fs-indexer-test
     command: >
-      sh -c '
-        echo "Waiting for Manticore to be ready..." &&
+      sh -c "
+        echo 'Waiting for Manticore to be ready...' &&
         sleep 5 &&
-        echo "Creating files table..." &&
-        response=$$(curl -sX POST http://manticore:9308/sql \
-          -H "Content-Type: application/json" \
-          -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len=2\"}") &&
-        echo "Create table response: $$response" &&
-        echo "Verifying table creation..." &&
-        tables=$$(curl -s "http://manticore:9308/cli?cmd=SHOW%20TABLES") &&
-        echo "Tables: $$tables" &&
-        if echo "$$tables" | grep -q "files"; then
-          echo "Table created successfully";
+        echo 'Creating files table...' &&
+        response=\$(curl -sX POST http://manticore:9308/sql \
+          -H 'Content-Type: application/json' \
+          -d '{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len='\"'\"'2'\"'\"'\"}') &&
+        echo \"Create table response: \$response\" &&
+        echo 'Verifying table creation...' &&
+        tables=\$(curl -s 'http://manticore:9308/cli?cmd=SHOW%20TABLES') &&
+        echo \"Tables: \$tables\" &&
+        if echo \"\$tables\" | grep -q 'files'; then
+          echo 'Table created successfully';
           exit 0;
         else
-          echo "Failed to create table!";
+          echo 'Failed to create table!';
           exit 1;
         fi
-      '
+      "
     restart: "no"
 
   indexer:
