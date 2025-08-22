@@ -96,23 +96,22 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     query_strip = query.lstrip().upper()
     try:
         if query_strip.startswith("SHOW "):
-            # Route SHOW commands to raw endpoint
-            raw_url = MANTICORE_URL.rstrip("/sql") + "/sql?mode=raw"
+            # Always send SHOW commands to /sql?mode=raw
+            base_url = MANTICORE_URL.split("?")[0]  # drop any existing query params
+            raw_url = f"{base_url}?mode=raw"
             data = urllib.parse.urlencode({"query": query})
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            response = requests.post(
-                raw_url, data=data, headers=headers, timeout=timeout
-            )
+            response = requests.post(raw_url, data=data, headers=headers, timeout=timeout)
             response.raise_for_status()
             result = response.json()
-            # raw endpoint returns a list of result sets
             if isinstance(result, list):
                 result = result[0]
             return result
         else:
-            # Normal SELECTs go to /sql and use JSON
+            # Normal SELECTs go to /sql
+            base_url = MANTICORE_URL.split("?")[0]  # drop any existing query params
             response = requests.post(
-                MANTICORE_URL,
+                base_url,
                 json={"query": query},
                 timeout=timeout,
             )
@@ -120,6 +119,7 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
             return response.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
 
 
 def escape_sql(value: str) -> str:
