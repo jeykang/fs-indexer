@@ -179,12 +179,12 @@ def build_search_query(
 
     # Search query
     if q:
-        if mode == SearchMode.REGEX:
+        if mode == SearchMode.REGEX or mode == SearchMode.SUBSTR:
             # Use REGEX function for RE2 pattern matching
             conditions.append(f"REGEX(basename_raw, '{escape_regex(q)}')")
-        elif mode == SearchMode.SUBSTR:
-            pattern = f".*{escape_regex(q)}.*"
-            conditions.append(f"REGEX(basename_raw, '{pattern}')")
+        # elif mode == SearchMode.SUBSTR:
+        #     pattern = f".*{escape_regex(q)}.*"
+        #     conditions.append(f"REGEX(basename_raw, '{pattern}')")
         else:  # PLAIN
             # Standard tokenized match
             escaped_q = escape_sql(q)
