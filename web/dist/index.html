@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Search</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🔍 File Search</h1>
+            <div class="stats" id="stats">
+                <span id="total-files">Loading...</span>
+                <span id="last-scan">-</span>
+            </div>
+        </header>
+
+        <main>
+            <div class="search-container">
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="Search files..." autofocus>
+                    <button id="search-btn">Search</button>
+                </div>
+
+                <div class="search-options">
+                    <div class="mode-selector">
+                        <label>Mode:</label>
+                        <select id="search-mode">
+                            <option value="substr">Substring</option>
+                            <option value="regex">Regex</option>
+                            <option value="plain">Plain</option>
+                        </select>
+                    </div>
+
+                    <div class="sort-selector">
+                        <label>Sort:</label>
+                        <select id="sort-order">
+                            <option value="mtime_desc">Modified ↓</option>
+                            <option value="mtime_asc">Modified ↑</option>
+                            <option value="size_desc">Size ↓</option>
+                            <option value="size_asc">Size ↑</option>
+                            <option value="path_asc">Path ↑</option>
+                            <option value="path_desc">Path ↓</option>
+                        </select>
+                    </div>
+
+                    <div class="page-size-selector">
+                        <label>Per page:</label>
+                        <select id="page-size">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="filters">
+                    <details>
+                        <summary>Advanced Filters</summary>
+                        <div class="filter-grid">
+                            <div class="filter-group">
+                                <label>Directory:</label>
+                                <input type="text" id="filter-dir" placeholder="/path/to/dir">
+                            </div>
+                            <div class="filter-group">
+                                <label>Extensions:</label>
+                                <input type="text" id="filter-ext" placeholder="pdf,docx,txt">
+                            </div>
+                            <div class="filter-group">
+                                <label>Min Size (bytes):</label>
+                                <input type="number" id="filter-size-min" placeholder="0">
+                            </div>
+                            <div class="filter-group">
+                                <label>Max Size (bytes):</label>
+                                <input type="number" id="filter-size-max" placeholder="">
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
+            <div class="results-container">
+                <div class="results-header" id="results-header" style="display: none;">
+                    <span id="result-count"></span>
+                    <span id="search-time"></span>
+                </div>
+
+                <div id="results" class="results"></div>
+
+                <div class="pagination" id="pagination" style="display: none;">
+                    <button id="prev-page" disabled>← Previous</button>
+                    <span id="page-info"></span>
+                    <button id="next-page">Next →</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# Run indexer every hour at minute 5
+5 * * * * cd /app && python -u indexer.py 2>&1

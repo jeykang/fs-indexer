@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+        default: 'latest'
+
+env:
+  REGISTRY_DOCKERHUB: docker.io
+  REGISTRY_GHCR: ghcr.io
+
+jobs:
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [indexer, api, web]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_DOCKERHUB }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_GHCR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/fs-indexer-${{ matrix.component }}
+            ${{ env.REGISTRY_GHCR }}/${{ github.repository_owner }}/fs-indexer-${{ matrix.component }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.component }}
+          file: ./${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Create release manifest
+  create-manifest:
+    name: Create Release Manifest
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'release'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate docker-compose.release.yml
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          cat > docker-compose.release.yml << EOF
+          version: "3.9"
+          
+          volumes:
+            manticore_data: {}
+            config: {}
+          
+          networks:
+            fs-indexer:
+              driver: bridge
+          
+          services:
+            manticore:
+              image: manticoresearch/manticore:latest
+              container_name: fs-manticore
+              restart: unless-stopped
+              ports:
+                - "\${MANTICORE_HTTP_PORT:-9308}:9308"
+                - "\${MANTICORE_MYSQL_PORT:-9306}:9306"
+              environment:
+                - EXTRA=1
+              volumes:
+                - manticore_data:/var/lib/manticore
+              networks:
+                - fs-indexer
+              healthcheck:
+                test: ["CMD", "curl", "-sf", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
+                interval: 30s
+                timeout: 3s
+                retries: 10
+          
+            indexer:
+              image: ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/fs-indexer-indexer:${TAG}
+              container_name: fs-indexer
+              depends_on:
+                manticore:
+                  condition: service_healthy
+              environment:
+                - MANTICORE_URL=http://manticore:9308/sql
+                - SCAN_ROOTS=\${SCAN_ROOTS:-/data}
+                - ROOT_NAME=\${ROOT_NAME:-data}
+                - EXCLUDES_FILE=/app/config/excludes.txt
+                - STABILITY_SEC=\${STABILITY_SEC:-30}
+                - BATCH_SIZE=\${BATCH_SIZE:-2000}
+                - LOG_LEVEL=\${LOG_LEVEL:-INFO}
+              volumes:
+                - type: bind
+                  source: \${HOST_PATH:-/home}
+                  target: /data
+                  read_only: true
+                - config:/app/config:ro
+              networks:
+                - fs-indexer
+              restart: "no"
+          
+            search-api:
+              image: ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/fs-indexer-api:${TAG}
+              container_name: fs-search-api
+              depends_on:
+                manticore:
+                  condition: service_healthy
+              environment:
+                - MANTICORE_URL=http://manticore:9308/sql
+                - DEFAULT_PAGE_SIZE=\${DEFAULT_PAGE_SIZE:-50}
+                - MAX_PAGE_SIZE=\${MAX_PAGE_SIZE:-500}
+                - API_PORT=8080
+              ports:
+                - "\${API_PORT:-8080}:8080"
+              networks:
+                - fs-indexer
+              restart: unless-stopped
+          
+            web:
+              image: ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/fs-indexer-web:${TAG}
+              container_name: fs-web
+              depends_on:
+                - search-api
+              ports:
+                - "\${WEB_PORT:-8081}:80"
+              networks:
+                - fs-indexer
+              restart: unless-stopped
+          EOF
+
+      - name: Upload release manifest
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./docker-compose.release.yml
+          asset_name: docker-compose.release.yml
+          asset_content_type: text/yaml

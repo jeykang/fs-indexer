@@ -1,0 +1,95 @@
+version: "3.9"
+
+volumes:
+  manticore_data_test:
+    driver: local
+  config_test:
+    driver: local
+
+networks:
+  fs-indexer-test:
+    driver: bridge
+
+services:
+  manticore:
+    image: manticoresearch/manticore:latest
+    container_name: fs-manticore-test
+    environment:
+      - EXTRA=1
+    volumes:
+      - manticore_data_test:/var/lib/manticore
+    networks:
+      - fs-indexer-test
+    ports:
+      - "9308:9308"
+      - "9306:9306"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bootstrap:
+    image: curlimages/curl:8.11.0
+    depends_on:
+      manticore:
+        condition: service_healthy
+    networks:
+      - fs-indexer-test
+    command: >
+      sh -c '
+        curl -sX POST http://manticore:9308/sql -H "Content-Type: application/json"
+             -d "{\"query\":\"CREATE TABLE IF NOT EXISTS files(id bigint, root string, path string indexed, basename text, ext string, dirpath string, size bigint, mtime bigint, uid int, gid int, mode int, seen_at bigint) min_infix_len='2'\"}"
+      '
+    restart: "no"
+
+  indexer:
+    image: local/fs-indexer-indexer:test
+    container_name: fs-indexer-test
+    depends_on:
+      manticore:
+        condition: service_healthy
+    environment:
+      - MANTICORE_URL=http://manticore:9308/sql
+      - SCAN_ROOTS=/data
+      - ROOT_NAME=test
+      - EXCLUDES_FILE=/app/config/excludes.txt
+      - STABILITY_SEC=0
+      - BATCH_SIZE=100
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./tests/integration/test_data:/data:ro
+      - ./config:/app/config:ro
+    networks:
+      - fs-indexer-test
+
+  search-api:
+    image: local/fs-indexer-api:test
+    container_name: fs-search-api-test
+    depends_on:
+      manticore:
+        condition: service_healthy
+    environment:
+      - MANTICORE_URL=http://manticore:9308/sql
+      - DEFAULT_PAGE_SIZE=10
+      - MAX_PAGE_SIZE=100
+      - API_PORT=8080
+    ports:
+      - "8080:8080"
+    networks:
+      - fs-indexer-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    image: local/fs-indexer-web:test
+    container_name: fs-web-test
+    depends_on:
+      - search-api
+    ports:
+      - "8081:80"
+    networks:
+      - fs-indexer-test

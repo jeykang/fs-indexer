@@ -1,0 +1,6 @@
+pytest==8.3.3
+pytest-cov==5.0.0
+pytest-mock==3.14.0
+pytest-asyncio==0.24.0
+responses==0.25.3
+faker==30.3.0
