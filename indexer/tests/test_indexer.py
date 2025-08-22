@@ -154,7 +154,11 @@ class TestFileIndexer:
             query = kwargs["json"]["query"]
         else:
             query = kwargs["data"]
-        assert f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query or f"DELETE+FROM+files+WHERE+root%3D%27test%27+AND+seen_at+<+{scan_id}" in query
+        assert (
+            f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query
+            or f"DELETE+FROM+files+WHERE+root%3D%27test%27+AND+seen_at+<+{scan_id}"
+            in query
+        )
         assert indexer.stats["files_deleted"] == 5
 
     def test_scan_directory(self, indexer):
