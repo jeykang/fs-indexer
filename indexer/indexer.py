@@ -110,6 +110,7 @@ class FileIndexer:
             root string,
             path string stored indexed,
             basename text stored indexed,
+            basename_raw string stored indexed,
             ext string,
             dirpath string stored,
             size bigint,
@@ -249,6 +250,7 @@ class FileIndexer:
                                 self.config.root_name,
                                 entry.path,
                                 basename,
+                                basename,
                                 ext,
                                 dirpath,
                                 stat.st_size,
@@ -294,7 +296,7 @@ class FileIndexer:
 
         sql = (
             "REPLACE INTO files "
-            "(id,root,path,basename,ext,dirpath,size,mtime,uid,gid,mode,seen_at) "
+            "(id,root,path,basename,basename_raw,ext,dirpath,size,mtime,uid,gid,mode,seen_at) "
             f"VALUES {','.join(values)}"
         )
 
