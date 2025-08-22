@@ -105,6 +105,9 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
         response = requests.post(url, data={"query": query}, timeout=timeout)
         response.raise_for_status()
         result = response.json()
+        if isinstance(result, list):
+            result = result[0] if result else {}
+
         # /sql?mode=raw returns a list; unwrap it
         if isinstance(result, list):
             result = result[0]
@@ -290,8 +293,9 @@ async def search_files(
 
     # Process results
     results = []
-    if search_result.get("data"):
-        for row in search_result["data"]:
+    rows = search_result.get("data") if isinstance(search_result, dict) else None
+    if rows:
+        for row in rows:
             results.append(
                 FileResult(
                     path=row.get("path", ""),
