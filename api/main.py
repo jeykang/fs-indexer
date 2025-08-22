@@ -99,25 +99,31 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     raw_url = f"{base_url}?mode=raw"
     try:
         if query_strip.startswith("SELECT"):
-            # Send SELECTs to /sql in JSON format
-            response = requests.post(select_url, json={"query": query}, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
+            url = select_url
+            payload = {"query": query}
+            response = requests.post(url, json=payload, timeout=timeout)
         else:
-            # All other queries go to /sql?mode=raw in form-data format
+            url = raw_url
             data = urllib.parse.urlencode({"query": query})
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            response = requests.post(
-                raw_url, data=data, headers=headers, timeout=timeout
-            )
+            response = requests.post(url, data=data, headers=headers, timeout=timeout)
+
+        if response.status_code != 200:
+            # Print debugging details
+            print(f"SQL error: status={response.status_code}, url={url}, query={query}")
+            print(f"Response body: {response.text}")
             response.raise_for_status()
-            result = response.json()
-            # /sql?mode=raw returns a list; unwrap it
-            if isinstance(result, list):
-                result = result[0]
-            return result
+
+        result = response.json()
+        if isinstance(result, list):
+            result = result[0]
+        return result
     except requests.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        # Still convert to HTTPException for the API, but include the query in the message
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database error when executing {query!r}: {e}",
+        )
 
 
 def escape_sql(value: str) -> str:
