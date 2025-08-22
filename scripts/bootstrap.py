@@ -29,20 +29,23 @@ def create_table(url="http://manticore:9308"):
     """Create the files table."""
     print("Creating files table...")
 
-    sql = """CREATE TABLE IF NOT EXISTS files (
-        id bigint,
-        root string,
-        path string indexed,
-        basename text,
-        ext string,
-        dirpath string,
-        size bigint,
-        mtime bigint,
-        uid int,
-        gid int,
-        mode int,
-        seen_at bigint
-    ) min_infix_len='2';"""
+    # Note: No semicolon at the end
+    sql = (
+        "CREATE TABLE IF NOT EXISTS files ("
+        "id bigint, "
+        "root string, "
+        "path string indexed, "
+        "basename text, "
+        "ext string, "
+        "dirpath string, "
+        "size bigint, "
+        "mtime bigint, "
+        "uid int, "
+        "gid int, "
+        "mode int, "
+        "seen_at bigint"
+        ") min_infix_len='2'"
+    )
 
     print(f"Executing SQL: {sql!r}")
 
@@ -58,13 +61,11 @@ def create_table(url="http://manticore:9308"):
         with urllib.request.urlopen(req, timeout=30) as response:
             result = response.read().decode("utf-8")
             print(f"Create table response: {result}")
-
-            # The /sql?mode=raw endpoint returns JSON; parse it
             result_json = json.loads(result)
+            # Check for errors in the returned JSON
             if result_json and result_json[0].get("error"):
                 print(f"Error creating table: {result_json[0]['error']}")
                 return False
-
             return True
     except urllib.error.HTTPError as e:
         print(f"HTTP Error: {e.code} - {e.reason}")
