@@ -141,6 +141,7 @@ class TestFileIndexer:
                 "test",
                 "/path/file2.py",
                 "file2.py",
+                "file2.py",
                 "py",
                 "/path",
                 200,
