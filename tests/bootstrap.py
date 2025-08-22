@@ -51,7 +51,7 @@ def create_table(url="http://manticore:9308"):
     req = urllib.request.Request(
         f"{url}/sql?mode=raw",
         data=encoded,
-        headers={"Content-Type": "application/x-www-form-urlencoded"}
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
 
     try:
