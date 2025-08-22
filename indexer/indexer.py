@@ -101,8 +101,8 @@ class FileIndexer:
             return requests.post(url, json={"query": sql}, timeout=timeout)
 
     def _ensure_table_exists(self):
-        drop_sql = "DROP TABLE IF EXISTS files"
-        self._send_sql(drop_sql, timeout=30)
+        #drop_sql = "DROP TABLE IF EXISTS files"
+        #self._send_sql(drop_sql, timeout=30)
 
         create_sql = """
         CREATE TABLE files (
