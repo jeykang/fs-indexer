@@ -1,17 +1,16 @@
 """Unit tests for the search API."""
 
-import json
 import os
 import sys
-from unittest.mock import Mock, patch
-
-import pytest
-from faker import Faker
-from fastapi.testclient import TestClient
 
 # Import the API module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import SearchMode, SortOrder, app, build_search_query, escape_sql, format_size
+
+from unittest.mock import patch
+
+from faker import Faker
+from fastapi.testclient import TestClient
 
 fake = Faker()
 client = TestClient(app)

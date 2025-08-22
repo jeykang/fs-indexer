@@ -5,17 +5,15 @@ Provides REST endpoints for searching indexed files.
 """
 
 import os
-import re
 import time
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-import orjson
 import requests
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel
 
 # Configuration
 MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql")
@@ -216,9 +214,9 @@ def build_search_query(
 async def health_check():
     """Health check endpoint."""
     try:
-        result = execute_sql("SHOW TABLES", timeout=5)
+        _ = execute_sql("SHOW TABLES", timeout=5)
         return {"status": "healthy", "manticore": "connected"}
-    except:
+    except Exception:
         raise HTTPException(status_code=503, detail="Service unhealthy")
 
 

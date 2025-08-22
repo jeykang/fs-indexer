@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from faker import Faker

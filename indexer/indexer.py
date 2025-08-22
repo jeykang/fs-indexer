@@ -9,10 +9,8 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterator, List, Optional, Set, Tuple
+from typing import Iterator, List, Tuple
 
-import orjson
 import requests
 import structlog
 import xxhash

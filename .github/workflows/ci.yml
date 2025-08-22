@@ -47,7 +47,7 @@ jobs:
       #  run: isort --check-only indexer/ api/
 
       - name: Run Flake8
-        run: flake8 indexer/ api/ --max-line-length=120 --extend-ignore=E203,W503
+        run: flake8 indexer/ api/ --max-line-length=120 --extend-ignore=E203,W503,E402
 
       - name: Run Pylint
         run: |
