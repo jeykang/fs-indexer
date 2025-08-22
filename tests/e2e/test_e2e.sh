@@ -18,6 +18,7 @@ docker compose --env-file ${ENV_FILE} -f docker-compose.test.yml run --rm indexe
 
 # Test 1: Basic search
 echo "Test 1: Basic search"
+curl "${API_URL}/search?q=cargo&mode=substr"
 RESULT=$(curl -sf "${API_URL}/search?q=cargo&mode=substr" | jq -r '.total')
 if [ "$RESULT" -gt 0 ]; then
     echo "✓ Basic search passed"
