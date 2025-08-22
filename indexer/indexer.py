@@ -16,6 +16,8 @@ import structlog
 import xxhash
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+import urllib.parse
+
 # Configure structured logging
 structlog.configure(
     processors=[
@@ -83,6 +85,21 @@ class FileIndexer:
         # Ensure table exists
         self._ensure_table_exists()
 
+    def _send_sql(self, sql: str, timeout: int = 30) -> requests.Response:
+        """
+        Send a SQL command to Manticore.  If the URL ends with /sql?mode=raw,
+        we must send the query as application/x-www-form-urlencoded.
+        Otherwise we send a JSON body (SELECT only).
+        """
+        url = self.config.manticore_url
+        if url.rstrip("/").endswith("/sql?mode=raw"):
+            data = urllib.parse.urlencode({"query": sql})
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            return requests.post(url, data=data, headers=headers, timeout=timeout)
+        else:
+            # /sql endpoint accepts JSON with `query` only for SELECT
+            return requests.post(url, json={"query": sql}, timeout=timeout)
+
     def _ensure_table_exists(self) -> None:
         """Ensure the files table exists in Manticore."""
         create_sql = """
@@ -103,9 +120,7 @@ class FileIndexer:
         """
 
         try:
-            response = requests.post(
-                self.config.manticore_url, json={"query": create_sql}, timeout=30
-            )
+            response = self._send_sql(create_sql, timeout=30)
             if response.status_code != 200:
                 logger.warning(
                     "table_create_response",
@@ -270,9 +285,7 @@ class FileIndexer:
             if self.config.log_level == "DEBUG":
                 logger.debug("executing_sql", sql_preview=sql[:500])
 
-            response = requests.post(
-                self.config.manticore_url, json={"query": sql}, timeout=120
-            )
+            response = self._send_sql(sql, timeout=120)
 
             # Check response and log details if error
             if response.status_code != 200:
@@ -307,9 +320,7 @@ class FileIndexer:
         sql = f"DELETE FROM files WHERE root='{self.config.root_name}' AND seen_at < {scan_id}"
 
         try:
-            response = requests.post(
-                self.config.manticore_url, json={"query": sql}, timeout=600
-            )
+            response = self._send_sql(sql, timeout=600)
 
             if response.status_code != 200:
                 logger.error(

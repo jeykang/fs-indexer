@@ -15,6 +15,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import urllib.parse
+
 # Configuration
 MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql?mode=raw")
 DEFAULT_PAGE_SIZE = int(os.environ.get("DEFAULT_PAGE_SIZE", "50"))
@@ -90,6 +92,21 @@ class StatsResponse(BaseModel):
     roots: List[Dict[str, Any]]
 
 
+def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
+    url = MANTICORE_URL
+    try:
+        if url.rstrip("/").endswith("/sql?mode=raw"):
+            data = urllib.parse.urlencode({"query": query})
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            response = requests.post(url, data=data, headers=headers, timeout=timeout)
+        else:
+            response = requests.post(url, json={"query": query}, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
 def escape_sql(value: str) -> str:
     """Escape SQL string values."""
     return value.replace("'", "''").replace("\\", "\\\\")
@@ -113,16 +130,6 @@ def format_size(size: int) -> str:
 def format_timestamp(ts: int) -> str:
     """Format Unix timestamp to human-readable date."""
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def execute_sql(query: str, timeout: int = 30) -> Dict[str, Any]:
-    """Execute SQL query on Manticore."""
-    try:
-        response = requests.post(MANTICORE_URL, json={"query": query}, timeout=timeout)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 def build_search_query(
