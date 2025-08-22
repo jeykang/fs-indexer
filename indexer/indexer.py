@@ -105,7 +105,7 @@ class FileIndexer:
         # self._send_sql(drop_sql, timeout=30)
 
         create_sql = """
-        CREATE TABLE IF EXISTS files (
+        CREATE TABLE files (
             id bigint,
             root string,
             path string stored indexed,
