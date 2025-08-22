@@ -41,7 +41,9 @@ def create_table(url="http://manticore:9308"):
         gid int,
         mode int,
         seen_at bigint
-    ) min_infix_len='2'"""
+    ) min_infix_len='2';"""
+
+    print(f"Executing SQL: {sql!r}")
 
     data = json.dumps({"query": sql}).encode("utf-8")
     req = urllib.request.Request(
