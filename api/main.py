@@ -93,33 +93,28 @@ class StatsResponse(BaseModel):
 
 
 def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
-    """Execute a SQL statement against Manticore Search via HTTP.
-
-    SELECT statements go to /sql; all others (SHOW, CREATE, REPLACE, DELETE, etc.)
-    go to /sql?mode=raw.  The query is always sent as form-encoded data.
-    """
     query_strip = query.lstrip().upper()
     base_url = MANTICORE_URL.split("?")[0]  # e.g. http://manticore:9308/sql
-    # Choose the endpoint based on the type of query
+    # Select endpoint based on query type
     if query_strip.startswith("SELECT"):
         url = base_url
     else:
         url = f"{base_url}?mode=raw"
-    # Encode the query as application/x-www-form-urlencoded
-    data = urllib.parse.urlencode({"query": query})
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
     try:
-        response = requests.post(url, data=data, headers=headers, timeout=timeout)
+        # Always send the query as a form field; requests will
+        # encode it properly and set the Content-Type header.
+        response = requests.post(url, data={"query": query}, timeout=timeout)
         response.raise_for_status()
         result = response.json()
-        # /sql?mode=raw returns a list of result sets; unwrap it
+        # /sql?mode=raw returns a list; unwrap it
         if isinstance(result, list):
             result = result[0]
         return result
     except requests.RequestException as e:
-        # Include the query in the error so debugging is easier
         raise HTTPException(
-            status_code=500, detail=f"Database error when executing {query!r}: {e}"
+            status_code=500,
+            detail=f"Database error when executing {query!r}: {e}",
         )
 
 
