@@ -184,7 +184,7 @@ def build_search_query(
             conditions.append(f"REGEX(basename_raw, '{escape_regex(q)}')")
         elif mode == SearchMode.SUBSTR:
             escaped_q = escape_sql(q)
-            conditions.append(f"MATCH('@basename *{escaped_q}*')")
+            conditions.append(f"MATCH('@basename \"*{escaped_q}*\"')")
         else:  # PLAIN
             # Standard tokenized match
             escaped_q = escape_sql(q)
