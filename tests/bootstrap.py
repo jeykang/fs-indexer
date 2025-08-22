@@ -41,7 +41,7 @@ def create_table(url="http://manticore:9308"):
         "id bigint, "
         "root string, "
         "path string stored indexed, "
-        "basename text stored, "
+        "basename text stored indexed, "
         "ext string, "
         "dirpath string stored, "
         "size bigint, "
