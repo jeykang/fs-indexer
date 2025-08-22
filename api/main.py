@@ -276,6 +276,10 @@ async def search_files(
     )
 
     # Get total count
+    # In search_files:
+    print(f"Search query: {search_query}")
+    print(f"Count query: {count_query}")
+
     count_result = execute_sql(count_query)
     total = 0
     if count_result.get("data") and len(count_result["data"]) > 0:
