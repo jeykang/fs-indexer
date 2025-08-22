@@ -185,7 +185,7 @@ def build_search_query(
         elif mode == SearchMode.SUBSTR:
             # Use MATCH with infix for substring search
             escaped_q = escape_sql(q)
-            conditions.append(f"MATCH('@basename_raw *{escaped_q}*')")
+            conditions.append(f"MATCH('@basename *{escaped_q}*')")
         else:  # PLAIN
             # Standard tokenized match
             escaped_q = escape_sql(q)
@@ -232,7 +232,7 @@ def build_search_query(
 
     # Build queries
     search_query = (
-        f"SELECT path, basename, basename_raw, ext, dirpath, size, mtime "
+        f"SELECT path, basename, ext, dirpath, size, mtime "
         f"FROM files "
         f"WHERE {where_clause} "
         f"{order_clause} "
@@ -315,7 +315,6 @@ async def search_files(
                 FileResult(
                     path=row.get("path", ""),
                     basename=row.get("basename", ""),
-                    basename_raw=row.get("basename_raw", ""),
                     ext=row.get("ext", ""),
                     dirpath=row.get("dirpath", ""),
                     size=row.get("size", 0),
