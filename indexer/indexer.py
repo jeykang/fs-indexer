@@ -286,11 +286,11 @@ class FileIndexer:
         for row in rows:
             escaped = [str(row[0])]  # id
             # Escape string fields using the improved escape function
-            for i in range(1, 6):
+            for i in range(1, 7):
                 val = self._escape_sql_string(str(row[i]))
                 escaped.append(f"'{val}'")
-            # Add numeric fields
-            for i in range(6, 12):
+            # Add numeric fields: the rest (size, mtime, uid, gid, mode, seen_at)
+            for i in range(7, 13):
                 escaped.append(str(row[i]))
             values.append(f"({','.join(escaped)})")
 
