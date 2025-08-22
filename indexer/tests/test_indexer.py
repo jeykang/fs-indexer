@@ -1,17 +1,18 @@
 """Unit tests for the filesystem indexer."""
 
 import os
-import tempfile
-import time
-from unittest.mock import Mock, patch, MagicMock
-import pytest
-from faker import Faker
 
 # Import the indexer module
 import sys
+import tempfile
+import time
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+from faker import Faker
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from indexer import FileIndexer, Config
+from indexer import Config, FileIndexer
 
 fake = Faker()
 

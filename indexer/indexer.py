@@ -4,17 +4,18 @@ Filesystem indexer for Manticore Search.
 Scans directories, extracts metadata, and indexes files.
 """
 
+import fnmatch
 import os
 import sys
 import time
-import fnmatch
-import xxhash
-import requests
-import orjson
-import structlog
-from pathlib import Path
-from typing import Iterator, List, Tuple, Optional, Set
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator, List, Optional, Set, Tuple
+
+import orjson
+import requests
+import structlog
+import xxhash
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configure structured logging
