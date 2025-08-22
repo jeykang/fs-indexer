@@ -52,7 +52,9 @@ class Config:
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
         return cls(
-            manticore_url=os.environ.get("MANTICORE_URL", "http://manticore:9308/sql?mode=raw"),
+            manticore_url=os.environ.get(
+                "MANTICORE_URL", "http://manticore:9308/sql?mode=raw"
+            ),
             scan_roots=[
                 p.strip() for p in os.environ.get("SCAN_ROOTS", "/data").split(",")
             ],

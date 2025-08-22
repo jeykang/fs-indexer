@@ -96,14 +96,14 @@ def verify_table(url="http://manticore:9308"):
             result = response.read().decode("utf-8")
             print(f"Tables raw response: {result}")
             result_json = json.loads(result)
-            # result_json is a list of result sets; take the first
             rows = result_json[0].get("data", [])
-            if any(row.get("Index") == "files" for row in rows):
-                print("✓ Table 'files' exists!")
-                return True
-            else:
-                print("✗ Table 'files' not found!")
-                return False
+            # Manticore returns "Table" (not "Index") for SHOW TABLES
+            for row in rows:
+                if row.get("Table") == "files" or row.get("Index") == "files":
+                    print("✓ Table 'files' exists!")
+                    return True
+            print("✗ Table 'files' not found!")
+            return False
     except Exception as e:
         print(f"Error verifying table: {e}")
         return False
