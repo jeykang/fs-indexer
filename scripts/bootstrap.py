@@ -6,6 +6,7 @@ import sys
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 
 
 def wait_for_manticore(url="http://manticore:9308", retries=30):
@@ -43,12 +44,14 @@ def create_table(url="http://manticore:9308"):
         seen_at bigint
     ) min_infix_len='2';"""
 
-    # Debug: show exact SQL including escape characters
     print(f"Executing SQL: {sql!r}")
 
-    data = json.dumps({"query": sql}).encode("utf-8")
+    # Encode the query for /sql?mode=raw
+    encoded = urllib.parse.urlencode({"query": sql}).encode("utf-8")
     req = urllib.request.Request(
-        f"{url}/sql", data=data, headers={"Content-Type": "application/json"}
+        f"{url}/sql?mode=raw",
+        data=encoded,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
 
     try:
@@ -56,16 +59,16 @@ def create_table(url="http://manticore:9308"):
             result = response.read().decode("utf-8")
             print(f"Create table response: {result}")
 
+            # The /sql?mode=raw endpoint returns JSON; parse it
             result_json = json.loads(result)
-            if "error" in result_json:
-                print(f"Error creating table: {result_json['error']}")
+            if result_json and result_json[0].get("error"):
+                print(f"Error creating table: {result_json[0]['error']}")
                 return False
 
             return True
     except urllib.error.HTTPError as e:
         print(f"HTTP Error: {e.code} - {e.reason}")
-        error_body = e.read().decode("utf-8")
-        print(f"Error body: {error_body}")
+        print(f"Error body: {e.read().decode('utf-8')}")
         return False
     except Exception as e:
         print(f"Error creating table: {e}")
