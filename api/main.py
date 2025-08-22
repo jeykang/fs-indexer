@@ -170,14 +170,14 @@ def build_search_query(
     # Search query
     if q:
         if mode == SearchMode.REGEX:
-            # Use RE2 pattern directly
+            # Use REGEX function for RE2 pattern matching
             conditions.append(f"REGEX(basename, '{escape_regex(q)}')")
         elif mode == SearchMode.SUBSTR:
-            # Use REGEX for substring search instead of MATCH with *…*
-            # Escape regex metacharacters and wrap in `.*` to match anywhere
-            pattern = f".*{escape_regex(q)}.*"
-            conditions.append(f"REGEX(basename, '{pattern}')")
+            # Use MATCH with infix for substring search
+            escaped_q = escape_sql(q)
+            conditions.append(f"MATCH('@basename *{escaped_q}*')")
         else:  # PLAIN
+            # Standard tokenized match
             escaped_q = escape_sql(q)
             conditions.append(f"MATCH('@basename {escaped_q}')")
 

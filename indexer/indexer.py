@@ -106,10 +106,10 @@ class FileIndexer:
         CREATE TABLE IF NOT EXISTS files (
             id bigint,
             root string,
-            path string indexed,
-            basename text,
+            path string stored indexed,
+            basename text stored,
             ext string,
-            dirpath string,
+            dirpath string stored,
             size bigint,
             mtime bigint,
             uid int,

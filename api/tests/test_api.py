@@ -57,7 +57,7 @@ class TestAPI:
             per_page=50,
         )
 
-        assert "REGEX(basename, '.*test.*')" in search_query
+        assert "MATCH('@basename *test*')" in search_query
         assert "ORDER BY mtime DESC" in search_query
         assert "LIMIT 50 OFFSET 0" in search_query
         assert "COUNT(*)" in count_query
