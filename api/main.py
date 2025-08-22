@@ -15,6 +15,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import urllib.parse
+
 # Configuration
 MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql")
 DEFAULT_PAGE_SIZE = int(os.environ.get("DEFAULT_PAGE_SIZE", "50"))
@@ -217,7 +219,12 @@ def build_search_query(
 async def health_check():
     """Health check endpoint."""
     try:
-        _ = execute_sql("SELECT 1", timeout=5)
+        # Always use raw mode for SHOW TABLES
+        url = MANTICORE_URL.rstrip("/sql") + "/sql?mode=raw"
+        data = urllib.parse.urlencode({"query": "SHOW TABLES"})
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        response = requests.post(url, data=data, headers=headers, timeout=5)
+        response.raise_for_status()
         return {"status": "healthy", "manticore": "connected"}
     except Exception:
         raise HTTPException(status_code=503, detail="Service unhealthy")
