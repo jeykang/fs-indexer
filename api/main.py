@@ -125,8 +125,17 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
 
 
 def escape_sql(value: str) -> str:
-    """Escape SQL string values."""
-    return value.replace("'", "''").replace("\\", "\\\\")
+    """Escape SQL string values using backslash escaping."""
+    # Escape backslashes first (must be done before other escapes)
+    value = value.replace("\\", "\\\\")
+    # Escape single quotes
+    value = value.replace("'", "\\'")
+    # Escape other special characters
+    value = value.replace("\n", "\\n")
+    value = value.replace("\r", "\\r")
+    value = value.replace("\t", "\\t")
+    value = value.replace("\x00", "")  # Remove null bytes
+    return value
 
 
 def escape_regex(pattern: str) -> str:

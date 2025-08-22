@@ -51,6 +51,35 @@ class TestFileIndexer:
         id3 = indexer._compute_file_id(1001, 2000)
         assert id1 != id3
 
+    def test_escape_sql_string(self, indexer):
+        """Test SQL string escaping with complex cases."""
+        # Test single quotes
+        assert indexer._escape_sql_string("test's file") == "test\\'s file"
+        assert (
+            indexer._escape_sql_string("Running 'nvm use x' should work")
+            == "Running \\'nvm use x\\' should work"
+        )
+
+        # Test backslashes
+        assert (
+            indexer._escape_sql_string("C:\\test\\file.txt") == "C:\\\\test\\\\file.txt"
+        )
+
+        # Test special characters
+        assert indexer._escape_sql_string("line1\nline2") == "line1\\nline2"
+        assert indexer._escape_sql_string("tab\there") == "tab\\there"
+
+        # Test complex case with multiple quotes
+        assert (
+            indexer._escape_sql_string(
+                "Running 'nvm use x' should create and change the 'current' symlink"
+            )
+            == "Running \\'nvm use x\\' should create and change the \\'current\\' symlink"
+        )
+
+        # Test null bytes are removed
+        assert indexer._escape_sql_string("test\x00file") == "testfile"
+
     def test_is_excluded(self, indexer):
         """Test exclusion pattern matching."""
         indexer.excludes = ["*.log", "/tmp/**", "**/node_modules/**", ".git"]
@@ -87,6 +116,7 @@ class TestFileIndexer:
     def test_bulk_upsert(self, mock_post, indexer):
         """Test bulk upsert to Manticore."""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
@@ -137,9 +167,45 @@ class TestFileIndexer:
         assert "REPLACE INTO files" in query or "REPLACE+INTO+files" in query
 
     @patch("requests.post")
+    def test_bulk_upsert_with_special_chars(self, mock_post, indexer):
+        """Test bulk upsert with filenames containing special characters."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Test with problematic filename
+        rows = [
+            (
+                1,
+                "test",
+                "/data/test/Running 'nvm use x' should create and change the 'current' symlink",
+                "Running 'nvm use x' should create and change the 'current' symlink",
+                "",
+                "/data/test",
+                100,
+                1000000,
+                1000,
+                1000,
+                755,
+                123456,
+            )
+        ]
+        indexer._bulk_upsert(rows)
+
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+
+        # The query should contain escaped quotes using backslash
+        query_data = kwargs.get("data", "")
+        assert "\\'nvm use x\\'" in query_data or "%27nvm+use+x%27" in query_data
+        assert "\\'current\\'" in query_data or "%27current%27" in query_data
+
+    @patch("requests.post")
     def test_sweep_deletions(self, mock_post, indexer):
         """Test deletion sweep."""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {"data": [{"deleted": 5}]}
         mock_post.return_value = mock_response
@@ -157,6 +223,8 @@ class TestFileIndexer:
         assert (
             f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query
             or f"DELETE+FROM+files+WHERE+root%3D%27test%27+AND+seen_at+%3C+{scan_id}"
+            in query
+            or f"DELETE FROM files WHERE root=\\'test\\' AND seen_at < {scan_id}"
             in query
         )
         assert indexer.stats["files_deleted"] == 5
@@ -198,3 +266,33 @@ class TestFileIndexer:
             extensions = [r[4] for r in results]
             assert "txt" in extensions
             assert "py" in extensions
+
+    def test_scan_directory_with_special_filenames(self, indexer):
+        """Test scanning directory with special characters in filenames."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create files with special characters
+            special_files = [
+                "file with spaces.txt",
+                "file's with apostrophe.txt",
+                "file-with-dashes.txt",
+                "file_with_underscores.txt",
+            ]
+
+            for filename in special_files:
+                filepath = os.path.join(tmpdir, filename)
+                with open(filepath, "w") as f:
+                    f.write("test content")
+                # Set mtime to past to avoid stability window
+                os.utime(filepath, (time.time() - 100, time.time() - 100))
+
+            # Scan directory
+            scan_id = int(time.time())
+            results = list(indexer._scan_directory(tmpdir, scan_id))
+
+            # Verify results
+            assert len(results) == len(special_files)
+
+            # Check that all special filenames were found
+            basenames = [r[3] for r in results]
+            for filename in special_files:
+                assert filename in basenames

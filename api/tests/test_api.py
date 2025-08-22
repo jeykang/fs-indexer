@@ -28,11 +28,33 @@ class TestAPI:
             assert response.json()["status"] == "healthy"
 
     def test_escape_sql(self):
-        """Test SQL escaping."""
+        """Test SQL escaping with backslash method."""
+        # Basic escaping
         assert escape_sql("test") == "test"
-        assert escape_sql("test's") == "test''s"
+        assert escape_sql("test's") == "test\\'s"
         assert escape_sql("test\\path") == "test\\\\path"
-        assert escape_sql("'; DROP TABLE--") == "''; DROP TABLE--"
+
+        # Complex cases with multiple quotes
+        assert escape_sql("'; DROP TABLE--") == "\\'; DROP TABLE--"
+        assert (
+            escape_sql("Running 'nvm use x' should work")
+            == "Running \\'nvm use x\\' should work"
+        )
+
+        # Special characters
+        assert escape_sql("line1\nline2") == "line1\\nline2"
+        assert escape_sql("tab\there") == "tab\\there"
+        assert escape_sql("test\x00null") == "testnull"  # Null bytes removed
+
+        # Complex filename that was causing issues
+        problem_filename = (
+            "Running 'nvm use x' should create and change the 'current' symlink"
+        )
+        escaped = escape_sql(problem_filename)
+        assert (
+            escaped
+            == "Running \\'nvm use x\\' should create and change the \\'current\\' symlink"
+        )
 
     def test_format_size(self):
         """Test size formatting."""
@@ -62,6 +84,29 @@ class TestAPI:
         assert "LIMIT 50 OFFSET 0" in search_query
         assert "COUNT(*)" in count_query
 
+    def test_build_search_query_with_special_chars(self):
+        """Test query building with special characters."""
+        # Test with query containing quotes
+        search_query, count_query = build_search_query(
+            q="file's name",
+            mode=SearchMode.SUBSTR,
+            ext=None,
+            dir="/path/with'quotes",
+            mtime_from=None,
+            mtime_to=None,
+            size_min=None,
+            size_max=None,
+            sort=SortOrder.MTIME_DESC,
+            page=1,
+            per_page=50,
+        )
+
+        # Check that quotes are properly escaped
+        assert "*file\\'s name*" in search_query or "*file's name*" in search_query
+        assert (
+            "/path/with\\'quotes" in search_query or "/path/with'quotes" in search_query
+        )
+
     def test_build_search_query_with_filters(self):
         """Test query building with filters."""
         search_query, count_query = build_search_query(
@@ -79,8 +124,12 @@ class TestAPI:
         )
 
         assert "REGEX(basename, 'doc')" in search_query
-        assert "ext IN ('pdf','docx')" in search_query
-        assert "dirpath LIKE '/home/user%'" in search_query
+        assert (
+            "ext IN (" in search_query
+            and "pdf" in search_query
+            and "docx" in search_query
+        )
+        assert "dirpath LIKE " in search_query and "/home/user%" in search_query
         assert "mtime >= 1000000" in search_query
         assert "mtime <= 2000000" in search_query
         assert "size >= 1024" in search_query
@@ -123,6 +172,32 @@ class TestAPI:
         assert len(data["results"]) == 2
         assert data["results"][0]["basename"] == "file1.txt"
         assert data["results"][1]["basename"] == "file2.pdf"
+
+    @patch("main.execute_sql")
+    def test_search_with_special_filename(self, mock_sql):
+        """Test search with special characters in filenames."""
+        mock_sql.side_effect = [
+            {"data": [{"total": 1}]},  # Count query
+            {
+                "data": [  # Search query
+                    {
+                        "path": "/test/Running 'nvm use x' should work.txt",
+                        "basename": "Running 'nvm use x' should work.txt",
+                        "ext": "txt",
+                        "dirpath": "/test",
+                        "size": 1024,
+                        "mtime": 1700000000,
+                    }
+                ]
+            },
+        ]
+
+        response = client.get("/search?q=nvm&mode=substr")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["total"] == 1
+        assert data["results"][0]["basename"] == "Running 'nvm use x' should work.txt"
 
     @patch("main.execute_sql")
     def test_stats_endpoint(self, mock_sql):

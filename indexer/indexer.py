@@ -167,6 +167,22 @@ class FileIndexer:
         """Compute unique file ID from device and inode."""
         return xxhash.xxh64_intdigest(f"{dev}:{ino}")
 
+    def _escape_sql_string(self, value: str) -> str:
+        """
+        Properly escape a string for Manticore SQL.
+        Uses backslash escaping which is more reliable for complex strings.
+        """
+        # Escape backslashes first (must be done before other escapes)
+        value = value.replace("\\", "\\\\")
+        # Escape single quotes
+        value = value.replace("'", "\\'")
+        # Escape other special characters that might cause issues
+        value = value.replace("\n", "\\n")
+        value = value.replace("\r", "\\r")
+        value = value.replace("\t", "\\t")
+        value = value.replace("\x00", "")  # Remove null bytes
+        return value
+
     def _scan_directory(self, root_dir: str, scan_id: int) -> Iterator[Tuple]:
         """
         Recursively scan directory and yield file metadata.
@@ -263,13 +279,13 @@ class FileIndexer:
         if not rows:
             return
 
-        # Build SQL with proper escaping
+        # Build SQL with proper escaping using the new escape function
         values = []
         for row in rows:
             escaped = [str(row[0])]  # id
-            # Escape string fields
+            # Escape string fields using the improved escape function
             for i in range(1, 6):
-                val = str(row[i]).replace("'", "''").replace("\\", "\\\\")
+                val = self._escape_sql_string(str(row[i]))
                 escaped.append(f"'{val}'")
             # Add numeric fields
             for i in range(6, 12):
@@ -319,7 +335,9 @@ class FileIndexer:
     )
     def _sweep_deletions(self, scan_id: int) -> None:
         """Remove files not seen in current scan."""
-        sql = f"DELETE FROM files WHERE root='{self.config.root_name}' AND seen_at < {scan_id}"
+        # Use the escape function for the root name as well
+        escaped_root = self._escape_sql_string(self.config.root_name)
+        sql = f"DELETE FROM files WHERE root='{escaped_root}' AND seen_at < {scan_id}"
 
         try:
             response = self._send_sql(sql, timeout=600)
