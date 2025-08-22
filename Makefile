@@ -8,7 +8,7 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build all Docker images
-	docker-compose build
+	docker compose build
 
 test-unit: ## Run unit tests
 	@echo "Running Python unit tests..."
@@ -17,18 +17,18 @@ test-unit: ## Run unit tests
 
 test-integration: build ## Run integration tests
 	@echo "Running integration tests..."
-	docker-compose -f docker-compose.test.yml up -d
+	docker compose -f docker-compose.test.yml up -d
 	sleep 10
-	docker-compose -f docker-compose.test.yml run --rm indexer
+	docker compose -f docker-compose.test.yml run --rm indexer
 	python -m pytest tests/integration/ -v
-	docker-compose -f docker-compose.test.yml down -v
+	docker compose -f docker-compose.test.yml down -v
 
 test-e2e: build ## Run end-to-end tests
 	@echo "Running E2E tests..."
-	docker-compose -f docker-compose.test.yml up -d
+	docker compose -f docker-compose.test.yml up -d
 	sleep 10
 	./tests/e2e/test_e2e.sh
-	docker-compose -f docker-compose.test.yml down -v
+	docker compose -f docker-compose.test.yml down -v
 
 test: test-unit test-integration test-e2e ## Run all tests
 
@@ -43,20 +43,20 @@ format: ## Format code
 	isort indexer/ api/
 
 clean: ## Clean up containers and volumes
-	docker-compose down -v
+	docker compose down -v
 	rm -rf __pycache__ */__pycache__ */*/__pycache__
 	rm -rf .pytest_cache */.pytest_cache
 	rm -rf .coverage htmlcov
 	find . -name "*.pyc" -delete
 
 deploy: build ## Deploy to production
-	docker-compose up -d
+	docker compose up -d
 
 logs: ## Show logs
-	docker-compose logs -f
+	docker compose logs -f
 
 stop: ## Stop all services
-	docker-compose down
+	docker compose down
 
 push: ## Push images to registry
 	docker tag local/fs-indexer-indexer:latest $(DOCKER_REGISTRY)/$(DOCKER_USERNAME)/fs-indexer-indexer:$(VERSION)

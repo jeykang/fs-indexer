@@ -50,7 +50,7 @@ Pull and run pre-built images from Docker Hub:
 wget https://github.com/jeykang/fs-indexer/releases/latest/download/docker-compose.release.yml
 
 # Start with pre-built images
-docker-compose -f docker-compose.release.yml up -d
+docker compose -f docker-compose.release.yml up -d
 ```
 
 ## Development

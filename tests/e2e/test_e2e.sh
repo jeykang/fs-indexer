@@ -13,7 +13,7 @@ echo "API is ready"
 
 # Run indexer
 echo "Running indexer..."
-docker-compose -f docker-compose.test.yml run --rm indexer
+docker compose -f docker-compose.test.yml run --rm indexer
 
 # Test 1: Basic search
 echo "Test 1: Basic search"

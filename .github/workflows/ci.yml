@@ -55,8 +55,8 @@ jobs:
 
       - name: Validate Docker Compose
         run: |
-          docker-compose config -q
-          docker-compose -f docker-compose.test.yml config -q
+          docker compose config -q
+          docker compose -f docker-compose.test.yml config -q
 
       - name: Validate Dockerfiles
         run: |
@@ -199,10 +199,10 @@ jobs:
 
       - name: Start services
         run: |
-          docker-compose -f docker-compose.test.yml up -d
+          docker compose -f docker-compose.test.yml up -d
           sleep 10
-          docker-compose -f docker-compose.test.yml ps
-          docker-compose -f docker-compose.test.yml logs
+          docker compose -f docker-compose.test.yml ps
+          docker compose -f docker-compose.test.yml logs
 
       - name: Run integration tests
         run: |
@@ -211,7 +211,7 @@ jobs:
           timeout 60 bash -c 'until curl -sf http://localhost:8080/health; do sleep 2; done'
           
           # Run indexer
-          docker-compose -f docker-compose.test.yml run --rm indexer
+          docker compose -f docker-compose.test.yml run --rm indexer
           
           # Test search API
           curl -sf http://localhost:8080/search?q=test | jq .
@@ -224,13 +224,13 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
-          docker-compose -f docker-compose.test.yml logs
-          docker-compose -f docker-compose.test.yml down
+          docker compose -f docker-compose.test.yml logs
+          docker compose -f docker-compose.test.yml down
 
       - name: Clean up
         if: always()
         run: |
-          docker-compose -f docker-compose.test.yml down -v
+          docker compose -f docker-compose.test.yml down -v
           rm -rf /tmp/manticore_test
 
   # Security scanning
@@ -306,7 +306,7 @@ jobs:
 
       - name: Start full stack
         run: |
-          docker-compose --env-file .env.e2e -f docker-compose.test.yml up -d
+          docker compose --env-file .env.e2e -f docker-compose.test.yml up -d
           sleep 15
 
       - name: Run E2E tests
@@ -317,5 +317,5 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          docker-compose -f docker-compose.test.yml down -v
+          docker compose -f docker-compose.test.yml down -v
           rm -rf /tmp/manticore_e2e tests/e2e/test_data
