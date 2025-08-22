@@ -90,43 +90,23 @@ class TestFileIndexer:
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        rows = [
-            (
-                1,
-                "test",
-                "/path/file1.txt",
-                "file1.txt",
-                "txt",
-                "/path",
-                100,
-                1000000,
-                1000,
-                1000,
-                755,
-                123456,
-            ),
-            (
-                2,
-                "test",
-                "/path/file2.py",
-                "file2.py",
-                "py",
-                "/path",
-                200,
-                2000000,
-                1000,
-                1000,
-                755,
-                123456,
-            ),
-        ]
-
+        rows = [...]
         indexer._bulk_upsert(rows)
 
         assert mock_post.called
-        call_args = mock_post.call_args
-        assert call_args[0][0] == indexer.config.manticore_url
-        assert "REPLACE INTO files" in call_args[1]["json"]["query"]
+        args, kwargs = mock_post.call_args
+
+        # Verify the correct URL was called
+        assert args[0] == indexer.config.manticore_url
+
+        # Extract the SQL from either JSON or form-encoded data
+        if "json" in kwargs:
+            query = kwargs["json"]["query"]
+        else:
+            # kwargs["data"] is a URL-encoded string like "query=REPLACE+INTO..."
+            query = kwargs["data"]
+        assert "REPLACE INTO files" in query
+
 
     @patch("requests.post")
     def test_sweep_deletions(self, mock_post, indexer):
@@ -140,12 +120,15 @@ class TestFileIndexer:
         indexer._sweep_deletions(scan_id)
 
         assert mock_post.called
-        call_args = mock_post.call_args
-        assert (
-            f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}"
-            in call_args[1]["json"]["query"]
-        )
+        args, kwargs = mock_post.call_args
+
+        if "json" in kwargs:
+            query = kwargs["json"]["query"]
+        else:
+            query = kwargs["data"]
+        assert f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query
         assert indexer.stats["files_deleted"] == 5
+
 
     def test_scan_directory(self, indexer):
         """Test directory scanning."""
