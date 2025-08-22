@@ -102,7 +102,11 @@ def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
         else:
             response = requests.post(url, json={"query": query}, timeout=timeout)
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        # Raw mode returns a list of result sets; take the first one
+        if isinstance(result, list):
+            result = result[0]
+        return result
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
