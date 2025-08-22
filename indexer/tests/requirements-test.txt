@@ -3,7 +3,7 @@ pytest-cov==5.0.0
 pytest-mock==3.14.0
 pytest-asyncio==0.24.0
 responses==0.25.3
-faker==30.3.0
+faker==37.5.3
 structlog==24.4.0
 xxhash==3.4.1
 requests==2.32.3
