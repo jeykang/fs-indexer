@@ -264,7 +264,7 @@ class TestFileIndexer:
             assert "subfile.py" in basenames
 
             # Check extensions
-            extensions = [r[4] for r in results]
+            extensions = [r[5] for r in results]
             assert "txt" in extensions
             assert "py" in extensions
 
