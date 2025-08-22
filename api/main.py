@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Configuration
-MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql")
+MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql?mode=raw")
 DEFAULT_PAGE_SIZE = int(os.environ.get("DEFAULT_PAGE_SIZE", "50"))
 MAX_PAGE_SIZE = int(os.environ.get("MAX_PAGE_SIZE", "500"))
 

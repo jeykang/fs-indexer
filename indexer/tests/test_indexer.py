@@ -21,7 +21,7 @@ fake = Faker()
 def config():
     """Create test configuration."""
     return Config(
-        manticore_url="http://localhost:9308/sql",
+        manticore_url="http://localhost:9308/sql?mode=raw",
         scan_roots=["/test/data"],
         root_name="test",
         excludes_file="/tmp/excludes.txt",

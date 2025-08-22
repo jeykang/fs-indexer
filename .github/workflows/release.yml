@@ -130,7 +130,7 @@ jobs:
                 manticore:
                   condition: service_healthy
               environment:
-                - MANTICORE_URL=http://manticore:9308/sql
+                - MANTICORE_URL=http://manticore:9308/sql?mode=raw
                 - SCAN_ROOTS=\${SCAN_ROOTS:-/data}
                 - ROOT_NAME=\${ROOT_NAME:-data}
                 - EXCLUDES_FILE=/app/config/excludes.txt
@@ -154,7 +154,7 @@ jobs:
                 manticore:
                   condition: service_healthy
               environment:
-                - MANTICORE_URL=http://manticore:9308/sql
+                - MANTICORE_URL=http://manticore:9308/sql?mode=raw
                 - DEFAULT_PAGE_SIZE=\${DEFAULT_PAGE_SIZE:-50}
                 - MAX_PAGE_SIZE=\${MAX_PAGE_SIZE:-500}
                 - API_PORT=8080
