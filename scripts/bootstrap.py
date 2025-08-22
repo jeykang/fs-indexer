@@ -52,7 +52,7 @@ def create_table(url="http://manticore:9308"):
         "root string, "
         "path string stored indexed, "
         "basename text stored indexed, "
-        "basename_raw string stored indexed, "
+        "basename_raw string indexed, "
         "ext string, "
         "dirpath string stored, "
         "size bigint, "
