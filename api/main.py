@@ -231,7 +231,7 @@ async def search_files(
         )
         response.raise_for_status()
         search_result = response.json()
-    except requests.RequestException as e:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")
 
     # Process results
@@ -308,7 +308,7 @@ async def get_stats():
             last_scan=last_scan,
             field_distribution=stats.get("fieldDistribution", {}),
         )
-    except requests.RequestException as e:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
 
 
@@ -338,7 +338,7 @@ async def suggest_extensions():
 
         return {"extensions": extensions}
 
-    except requests.RequestException as e:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get suggestions: {e}")
 
 
