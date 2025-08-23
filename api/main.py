@@ -94,30 +94,29 @@ class StatsResponse(BaseModel):
 def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
     query_strip = query.lstrip().upper()
     base_url = MANTICORE_URL.split("?")[0]  # e.g. http://manticore:9308/sql
-
-    # For SELECT queries, use JSON format with /sql endpoint
-    # For other queries, use form-encoded with /sql?mode=raw
+    # Select endpoint based on query type
     if query_strip.startswith("SELECT"):
         url = base_url
-        # SELECT queries need JSON format for /sql endpoint
-        response = requests.post(url, json={"query": query}, timeout=timeout)
     else:
         url = f"{base_url}?mode=raw"
-        # Non-SELECT queries use form-encoded for /sql?mode=raw
-        response = requests.post(url, data={"query": query}, timeout=timeout)
 
     try:
+        # Always send the query as a form field; requests will
+        # encode it properly and set the Content-Type header.
+        response = requests.post(url, data={"query": query}, timeout=timeout)
+        # response = requests.post(url, json={"query": query}, timeout=timeout)
         if response.status_code != 200:
             # Debug output: show exactly what Manticore returned
             print(f"SQL error: status={response.status_code}, url={url}, query={query}")
             print(f"Response body: {response.text}")
         response.raise_for_status()
         result = response.json()
-
-        # /sql?mode=raw returns a list; unwrap it
         if isinstance(result, list):
             result = result[0] if result else {}
 
+        # /sql?mode=raw returns a list; unwrap it
+        if isinstance(result, list):
+            result = result[0]
         return result
     except requests.RequestException as e:
         print(f"Exception when executing {query!r}: {e}")  # Additional debug
