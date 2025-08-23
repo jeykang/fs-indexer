@@ -1,109 +1,141 @@
 version: "3.9"
 
 volumes:
-  manticore_data_test:
+  meilisearch_data_test:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${MEILISEARCH_DATA_PATH:-./data/meilisearch}
   config_test:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./config
 
 networks:
-  fs-indexer-test:
+  fs-indexer_test:
     driver: bridge
 
 services:
-  manticore:
-    image: manticoresearch/manticore:latest
-    container_name: fs-manticore-test
-    environment:
-      - EXTRA=1
-    volumes:
-      - manticore_data_test:/var/lib/manticore
-    networks:
-      - fs-indexer-test
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: fs-meilisearch_test
+    restart: unless-stopped
     ports:
-      - "9308:9308"
-      - "9306:9306"
+      - "${MEILISEARCH_PORT:-7700}:7700"
+    environment:
+      - MEILI_ENV=${MEILI_ENV:-development}
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-}
+      - MEILI_NO_ANALYTICS=true
+      - MEILI_DB_PATH=/meili_data
+      - MEILI_DUMP_DIR=/dumps
+      - MEILI_LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MEILI_MAX_INDEXING_MEMORY=2147483648  # 2GB for large datasets
+      - MEILI_MAX_INDEXING_THREADS=4
+    volumes:
+      - meilisearch_data_test:/meili_data
+      - meilisearch_data_test:/dumps
+    networks:
+      - fs-indexer_test
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   bootstrap:
     image: python:3.12-slim
     depends_on:
-      manticore:
+      meilisearch:
         condition: service_healthy
     networks:
-      - fs-indexer-test
+      - fs-indexer_test
+    environment:
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-}
     volumes:
       - ./scripts/bootstrap.py:/bootstrap.py:ro
     command: ["python", "/bootstrap.py"]
     restart: "no"
 
   indexer:
-    build: 
-      context: ./indexer
-      dockerfile: Dockerfile
-    image: local/fs-indexer-indexer:test
-    container_name: fs-indexer-test
+    build: ./indexer
+    image: local/fs-indexer:latest
+    container_name: fs-indexer_test
     depends_on:
-      manticore:
+      meilisearch:
         condition: service_healthy
       bootstrap:
         condition: service_completed_successfully
     environment:
-      - MANTICORE_URL=http://manticore:9308/sql?mode=raw
-      - SCAN_ROOTS=/data
-      - ROOT_NAME=test
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-}
+      - SCAN_ROOTS=${SCAN_ROOTS:-/data}
+      - ROOT_NAME=${ROOT_NAME:-data}
       - EXCLUDES_FILE=/app/config/excludes.txt
-      - STABILITY_SEC=0
-      - BATCH_SIZE=100
-      - LOG_LEVEL=DEBUG
+      - STABILITY_SEC=${STABILITY_SEC:-30}
+      - BATCH_SIZE=${BATCH_SIZE:-10000}  # Meilisearch handles larger batches well
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - type: bind
-        source: ${HOST_PATH:-./tests/integration/test_data}
+        source: ${HOST_PATH:-/home}
         target: /data
         read_only: true
-      - ./config:/app/config:ro
+      - config_test:/app/config:ro
     networks:
-      - fs-indexer-test
+      - fs-indexer_test
+    restart: "no"
+
+  scheduler:
+    image: mcuadros/ofelia:latest
+    container_name: fs-scheduler_test
+    depends_on:
+      - indexer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./cron/config.ini:/etc/ofelia/config.ini:ro
+    networks:
+      - fs-indexer_test
+    restart: unless-stopped
 
   search-api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile
-    image: local/fs-indexer-api:test
-    container_name: fs-search-api-test
+    build: ./api
+    image: local/fs-search-api:latest
+    container_name: fs-search-api_test
     depends_on:
-      manticore:
+      meilisearch:
         condition: service_healthy
       bootstrap:
         condition: service_completed_successfully
     environment:
-      - MANTICORE_URL=http://manticore:9308/sql?mode=raw
-      - DEFAULT_PAGE_SIZE=10
-      - MAX_PAGE_SIZE=100
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-}
+      - DEFAULT_PAGE_SIZE=${DEFAULT_PAGE_SIZE:-50}
+      - MAX_PAGE_SIZE=${MAX_PAGE_SIZE:-500}
       - API_PORT=8080
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
     networks:
-      - fs-indexer-test
+      - fs-indexer_test
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
-      retries: 5
+      retries: 3
 
   web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-    image: local/fs-indexer-web:test
-    container_name: fs-web-test
+    build: ./web
+    image: local/fs-web:latest
+    container_name: fs-web_test
     depends_on:
       - search-api
     ports:
-      - "8081:80"
+      - "${WEB_PORT:-8081}:80"
     networks:
-      - fs-indexer-test
+      - fs-indexer_test
+    restart: unless-stopped
+    environment:
+      - API_URL=http://localhost:${API_PORT:-8080}
