@@ -65,7 +65,14 @@ def wait_for_task(base_url: str, task_uid: int, timeout: int = 60) -> bool:
             if status == "succeeded":
                 return True
             elif status == "failed":
-                print(f"Task {task_uid} failed: {task.get('error')}")
+                # print(f"Task {task_uid} failed: {task.get('error')}")
+                # return False
+                err = task.get("error") or {}
+                # Meilisearch may enqueue and then fail a duplicate create with index_already_exists
+                if isinstance(err, dict) and err.get("code") == "index_already_exists":
+                    print(f"Task {task_uid} reports index already exists; continuing.")
+                    return True
+                print(f"Task {task_uid} failed: {err}")
                 return False
 
             time.sleep(0.5)
@@ -83,6 +90,14 @@ def create_index(base_url: str) -> bool:
 
     try:
         # Create index
+        # Fast path: if it already exists, skip creation
+        try:
+            make_request(f"{base_url}/indexes/files")  # 200 if exists
+            print("Index already exists, skipping creation.")
+            return True
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
         response = make_request(
             f"{base_url}/indexes",
             method="POST",
