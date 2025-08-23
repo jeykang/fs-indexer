@@ -16,22 +16,21 @@ echo "API is ready"
 echo "Running indexer..."
 docker compose --env-file ${ENV_FILE} -f docker-compose.test.yml run --rm indexer
 
-# Test 1: Basic search
-echo "Test 1: Basic search"
-curl "${API_URL}/search?q=cargo&mode=substr"
-RESULT=$(curl -sf "${API_URL}/search?q=cargo&mode=substr" | jq -r '.total')
+# Test 1: Basic search (substring)
+echo "Test 1: Basic substring search"
+RESULT=$(curl -sf "${API_URL}/search?q=doc&mode=substr" | jq -r '.total')
 if [ "$RESULT" -gt 0 ]; then
-    echo "✓ Basic search passed"
+    echo "✓ Basic search passed (found $RESULT results)"
 else
     echo "✗ Basic search failed"
     exit 1
 fi
 
-# Test 2: Regex search
+# Test 2: Regex search (match script followed by digits)
 echo "Test 2: Regex search"
-RESULT=$(curl -sf "${API_URL}/search?q=^script\\.py$&mode=regex" | jq -r '.total')
+RESULT=$(curl -sf "${API_URL}/search?q=^script[0-9]+\\.py$&mode=regex" | jq -r '.total')
 if [ "$RESULT" -gt 0 ]; then
-    echo "✓ Regex search passed"
+    echo "✓ Regex search passed (found $RESULT results)"
 else
     echo "✗ Regex search failed"
     exit 1
@@ -41,7 +40,7 @@ fi
 echo "Test 3: Extension filter"
 RESULT=$(curl -sf "${API_URL}/search?ext=txt&ext=py" | jq -r '.total')
 if [ "$RESULT" -gt 0 ]; then
-    echo "✓ Extension filter passed"
+    echo "✓ Extension filter passed (found $RESULT results)"
 else
     echo "✗ Extension filter failed"
     exit 1
@@ -53,7 +52,7 @@ TOTAL=$(curl -sf "${API_URL}/stats" | jq -r '.total_files')
 if [ "$TOTAL" -gt 0 ]; then
     echo "✓ Stats endpoint passed (found $TOTAL files)"
 else
-    echo "✗ Stats endpoint failed (expected 300, got $TOTAL)"
+    echo "✗ Stats endpoint failed"
     exit 1
 fi
 
@@ -75,6 +74,16 @@ if [ "$PAGE1" -gt 0 ] && [ "$PAGE2" -ge 0 ]; then
     echo "✓ Pagination passed"
 else
     echo "✗ Pagination failed"
+    exit 1
+fi
+
+# Test 7: Plain text search
+echo "Test 7: Plain text search"
+RESULT=$(curl -sf "${API_URL}/search?q=image&mode=plain" | jq -r '.total')
+if [ "$RESULT" -gt 0 ]; then
+    echo "✓ Plain text search passed (found $RESULT results)"
+else
+    echo "✗ Plain text search failed"
     exit 1
 fi
 
