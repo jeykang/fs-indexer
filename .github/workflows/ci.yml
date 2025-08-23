@@ -197,6 +197,12 @@ jobs:
           # Create Meilisearch data directory
           mkdir -p /tmp/meilisearch_test
 
+      - name: Prepare Meilisearch data dir
+        run: |
+          mkdir -p data/meilisearch
+          # ensure it is completely empty (also removes any .gitkeep if present)
+          find data/meilisearch -mindepth 1 -delete
+
       - name: Start services
         run: |
           docker compose -f docker-compose.test.yml up -d
@@ -303,6 +309,12 @@ jobs:
           echo "HOST_PATH=$(pwd)/tests/e2e/test_data" >> .env.e2e
           echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_e2e" >> .env.e2e
           mkdir -p /tmp/meilisearch_e2e
+
+      - name: Prepare Meilisearch data dir
+        run: |
+          mkdir -p data/meilisearch
+          # ensure it is completely empty (also removes any .gitkeep if present)
+          find data/meilisearch -mindepth 1 -delete
 
       - name: Start full stack
         run: |
