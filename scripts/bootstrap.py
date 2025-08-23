@@ -141,7 +141,7 @@ def configure_index(base_url: str) -> bool:
             "seen_at",
         ],
         # Fields that can be used for sorting
-        "sortableAttributes": ["basename", "path", "size", "mtime"],
+        "sortableAttributes": ["basename", "path", "size", "mtime", "seen_at"],
         # Fields to return in search results
         "displayedAttributes": [
             "id",

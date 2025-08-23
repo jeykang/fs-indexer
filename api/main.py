@@ -291,12 +291,24 @@ async def get_stats():
         stats = response.json()
 
         # Get the most recent seen_at value for last scan time
-        search_response = meili_session.post(
-            f"{MEILISEARCH_URL}/indexes/files/search",
-            json={"q": "", "limit": 1, "sort": ["seen_at:desc"]},
-        )
-        search_response.raise_for_status()
-        search_data = search_response.json()
+        try:
+            search_response = meili_session.post(
+                f"{MEILISEARCH_URL}/indexes/files/search",
+                json={"q": "", "limit": 1, "sort": ["seen_at:desc"]},
+            )
+            search_response.raise_for_status()
+            search_data = search_response.json()
+        except requests.RequestException:
+            # Fallback: try without sort (schema may not mark seen_at as sortable yet)
+            try:
+                fallback = meili_session.post(
+                    f"{MEILISEARCH_URL}/indexes/files/search",
+                    json={"q": "", "limit": 1},
+                )
+                fallback.raise_for_status()
+                search_data = fallback.json()
+            except requests.RequestException:
+                search_data = {"hits": []}
 
         last_scan = None
         if search_data.get("hits"):
