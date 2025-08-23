@@ -207,7 +207,7 @@ jobs:
       - name: Run integration tests
         run: |
           # Wait for services to be ready
-          timeout 240 bash -c 'until curl -sf http://localhost:9308/cli?cmd=SHOW%20TABLES; do sleep 2; done'
+          timeout 240 bash -c 'until curl -sf http://localhost:7700/health; do sleep 2; done'
           timeout 240 bash -c 'until curl -sf http://localhost:8080/health; do sleep 2; done'
           
           # Run indexer

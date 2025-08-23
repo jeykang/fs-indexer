@@ -4,7 +4,7 @@
 [![Release](https://github.com/jeykang/fs-indexer/actions/workflows/release.yml/badge.svg)](https://github.com/jeykang/fs-indexer/actions/workflows/release.yml)
 [![Security Audit](https://github.com/jeykang/fs-indexer/actions/workflows/security.yml/badge.svg)](https://github.com/jeykang/fs-indexer/actions/workflows/security.yml)
 
-A high-performance, dockerized filesystem indexing and search system using Manticore Search.
+A high-performance, dockerized filesystem indexing and search system using Meilisearch.
 
 ## Features
 
@@ -39,7 +39,7 @@ make deploy
 4. Access the web interface:
 - Web UI: http://localhost:8081
 - API: http://localhost:8080
-- Manticore: http://localhost:9308
+- Meilisearch: http://localhost:7700
 
 ## Using Pre-built Images
 
@@ -104,9 +104,9 @@ See `.env.example` for full configuration options.
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Web UI    │────▶│  Search API │────▶│  Manticore  │
+│   Web UI    │────▶│  Search API │───▶│ Meilisearch │
 └─────────────┘     └─────────────┘     └─────────────┘
-                                               ▲
+                                              ▲
                     ┌─────────────┐           │
                     │  Scheduler  │───────────┤
                     └─────────────┘           │

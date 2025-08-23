@@ -1,302 +1,265 @@
-"""Unit tests for the filesystem indexer."""
+"""Unit tests for the search API."""
 
+import json
 import os
-
-# Import the indexer module
 import sys
-import tempfile
-import time
 from unittest.mock import Mock, patch
 
 import pytest
-from faker import Faker
+from fastapi.testclient import TestClient
 
+# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from indexer import Config, FileIndexer
+from main import app, SearchMode, SortOrder
 
-fake = Faker()
-
-
-@pytest.fixture
-def config():
-    """Create test configuration."""
-    return Config(
-        manticore_url="http://localhost:9308/sql?mode=raw",
-        scan_roots=["/test/data"],
-        root_name="test",
-        excludes_file="/tmp/excludes.txt",
-        stability_sec=30,
-        batch_size=100,
-        log_level="INFO",
-    )
+client = TestClient(app)
 
 
-@pytest.fixture
-def indexer(config):
-    """Create indexer instance."""
-    return FileIndexer(config)
+class TestSearchAPI:
+    """Test cases for Search API endpoints."""
 
-
-class TestFileIndexer:
-    """Test cases for FileIndexer class."""
-
-    def test_compute_file_id(self, indexer):
-        """Test file ID computation."""
-        # Test that same dev/ino produces same ID
-        id1 = indexer._compute_file_id(1000, 2000)
-        id2 = indexer._compute_file_id(1000, 2000)
-        assert id1 == id2
-
-        # Test that different dev/ino produces different IDs
-        id3 = indexer._compute_file_id(1001, 2000)
-        assert id1 != id3
-
-    def test_escape_sql_string(self, indexer):
-        """Test SQL string escaping with complex cases."""
-        # Test single quotes
-        assert indexer._escape_sql_string("test's file") == "test\\'s file"
-        assert (
-            indexer._escape_sql_string("Running 'nvm use x' should work")
-            == "Running \\'nvm use x\\' should work"
-        )
-
-        # Test backslashes
-        assert (
-            indexer._escape_sql_string("C:\\test\\file.txt") == "C:\\\\test\\\\file.txt"
-        )
-
-        # Test special characters
-        assert indexer._escape_sql_string("line1\nline2") == "line1\\nline2"
-        assert indexer._escape_sql_string("tab\there") == "tab\\there"
-
-        # Test complex case with multiple quotes
-        assert (
-            indexer._escape_sql_string(
-                "Running 'nvm use x' should create and change the 'current' symlink"
-            )
-            == "Running \\'nvm use x\\' should create and change the \\'current\\' symlink"
-        )
-
-        # Test null bytes are removed
-        assert indexer._escape_sql_string("test\x00file") == "testfile"
-
-    def test_is_excluded(self, indexer):
-        """Test exclusion pattern matching."""
-        indexer.excludes = ["*.log", "/tmp/**", "**/node_modules/**", ".git"]
-
-        assert indexer._is_excluded("test.log")
-        assert indexer._is_excluded("/tmp/file.txt")
-        assert indexer._is_excluded("project/node_modules/package.json")
-        assert indexer._is_excluded(".git")
-        assert not indexer._is_excluded("test.txt")
-        assert not indexer._is_excluded("src/main.py")
-
-    def test_load_excludes(self, config):
-        """Test loading exclusion patterns from file."""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-            f.write("# Comment\n")
-            f.write("*.tmp\n")
-            f.write("/cache/**\n")
-            f.write("\n")  # Empty line
-            f.write("*.bak\n")
-            excludes_file = f.name
-
-        try:
-            config.excludes_file = excludes_file
-            indexer = FileIndexer(config)
-
-            assert "*.tmp" in indexer.excludes
-            assert "/cache/**" in indexer.excludes
-            assert "*.bak" in indexer.excludes
-            assert len(indexer.excludes) == 3
-        finally:
-            os.unlink(excludes_file)
-
-    @patch("requests.post")
-    def test_bulk_upsert(self, mock_post, indexer):
-        """Test bulk upsert to Manticore."""
+    @patch('main.meili_session.get')
+    def test_health_check_success(self, mock_get):
+        """Test health check endpoint when Meilisearch is healthy."""
         mock_response = Mock()
-        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "available"}
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["meilisearch"] == "available"
+
+    @patch('main.meili_session.get')
+    def test_health_check_failure(self, mock_get):
+        """Test health check endpoint when Meilisearch is down."""
+        mock_get.side_effect = Exception("Connection error")
+
+        response = client.get("/health")
+        assert response.status_code == 503
+        assert "Service unhealthy" in response.json()["detail"]
+
+    @patch('main.meili_session.post')
+    def test_search_basic(self, mock_post):
+        """Test basic search functionality."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "hits": [
+                {
+                    "id": 1,
+                    "path": "/test/file.txt",
+                    "basename": "file.txt",
+                    "ext": "txt",
+                    "dirpath": "/test",
+                    "size": 1024,
+                    "mtime": 1700000000
+                }
+            ],
+            "estimatedTotalHits": 1
+        }
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        rows = [
-            (
-                1,
-                "test",
-                "/path/file1.txt",
-                "file1.txt",
-                "file1.txt",
-                "txt",
-                "/path",
-                100,
-                1000000,
-                1000,
-                1000,
-                755,
-                123456,
-            ),
-            (
-                2,
-                "test",
-                "/path/file2.py",
-                "file2.py",
-                "file2.py",
-                "py",
-                "/path",
-                200,
-                2000000,
-                1000,
-                1000,
-                755,
-                123456,
-            ),
+        response = client.get("/search?q=test")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["query"] == "test"
+        assert data["mode"] == SearchMode.SUBSTR
+        assert data["total"] == 1
+        assert len(data["results"]) == 1
+        assert data["results"][0]["basename"] == "file.txt"
+
+    @patch('main.meili_session.post')
+    def test_search_with_filters(self, mock_post):
+        """Test search with multiple filters."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "hits": [],
+            "estimatedTotalHits": 0
+        }
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        response = client.get(
+            "/search?q=test&ext=txt&ext=pdf&dir=/docs&size_min=100&size_max=10000"
+        )
+        assert response.status_code == 200
+        
+        # Verify the filter was built correctly
+        call_args = mock_post.call_args
+        search_params = call_args[1]["json"]
+        assert "filter" in search_params
+        assert "ext" in search_params["filter"]
+        assert "size >=" in search_params["filter"]
+
+    @patch('main.meili_session.post')
+    def test_search_regex_mode(self, mock_post):
+        """Test regex search mode with post-filtering."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "hits": [
+                {"basename": "test123.txt", "path": "/test123.txt", "ext": "txt", 
+                 "dirpath": "/", "size": 100, "mtime": 1700000000},
+                {"basename": "test.txt", "path": "/test.txt", "ext": "txt",
+                 "dirpath": "/", "size": 100, "mtime": 1700000000},
+                {"basename": "file456.txt", "path": "/file456.txt", "ext": "txt",
+                 "dirpath": "/", "size": 100, "mtime": 1700000000}
+            ],
+            "estimatedTotalHits": 3
+        }
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Search for files with numbers in name
+        response = client.get("/search?q=test[0-9]%2B&mode=regex")
+        assert response.status_code == 200
+        data = response.json()
+        # Regex filter should only match test123.txt
+        assert data["total"] == 1
+        assert data["results"][0]["basename"] == "test123.txt"
+
+    @patch('main.meili_session.post')
+    def test_search_pagination(self, mock_post):
+        """Test search pagination."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "hits": [{"basename": f"file{i}.txt", "path": f"/file{i}.txt", 
+                     "ext": "txt", "dirpath": "/", "size": 100, "mtime": 1700000000}
+                    for i in range(5)],
+            "estimatedTotalHits": 100
+        }
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        response = client.get("/search?page=2&per_page=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["page"] == 2
+        assert data["per_page"] == 5
+        assert data["total_pages"] == 20  # 100 total / 5 per page
+        
+        # Check that offset was calculated correctly
+        call_args = mock_post.call_args
+        search_params = call_args[1]["json"]
+        assert search_params["offset"] == 5  # (page 2 - 1) * 5
+
+    @patch('main.meili_session.post')
+    def test_search_sorting(self, mock_post):
+        """Test different sort orders."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"hits": [], "estimatedTotalHits": 0}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Test each sort order
+        sort_tests = [
+            (SortOrder.MTIME_DESC, ["mtime:desc"]),
+            (SortOrder.SIZE_ASC, ["size:asc"]),
+            (SortOrder.PATH_DESC, ["path:desc"])
         ]
-        indexer._bulk_upsert(rows)
 
-        assert mock_post.called
-        args, kwargs = mock_post.call_args
+        for sort_order, expected_sort in sort_tests:
+            response = client.get(f"/search?sort={sort_order}")
+            assert response.status_code == 200
+            
+            call_args = mock_post.call_args
+            search_params = call_args[1]["json"]
+            assert search_params["sort"] == expected_sort
 
-        # Verify the correct URL was called
-        assert args[0] == indexer.config.manticore_url
+    @patch('main.meili_session.get')
+    @patch('main.meili_session.post')
+    def test_stats_endpoint(self, mock_post, mock_get):
+        """Test statistics endpoint."""
+        # Mock index stats
+        mock_get_response = Mock()
+        mock_get_response.json.return_value = {
+            "numberOfDocuments": 1000,
+            "isIndexing": False,
+            "fieldDistribution": {"ext": 100, "size": 100}
+        }
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
 
-        # Extract the SQL from either JSON or form-encoded data
-        if "json" in kwargs:
-            query = kwargs["json"]["query"]
-        else:
-            # kwargs["data"] is a URL-encoded string like "query=REPLACE+INTO..."
-            query = kwargs["data"]
-        assert "REPLACE INTO files" in query or "REPLACE+INTO+files" in query
+        # Mock search for last scan
+        mock_post_response = Mock()
+        mock_post_response.json.return_value = {
+            "hits": [{"seen_at": 1700000000}]
+        }
+        mock_post_response.raise_for_status = Mock()
+        mock_post.return_value = mock_post_response
 
-    @patch("requests.post")
-    def test_bulk_upsert_with_special_chars(self, mock_post, indexer):
-        """Test bulk upsert with filenames containing special characters."""
+        response = client.get("/stats")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_files"] == 1000
+        assert data["is_indexing"] is False
+        assert data["last_scan"] == 1700000000
+        assert "field_distribution" in data
+
+    @patch('main.meili_session.post')
+    def test_suggest_extensions(self, mock_post):
+        """Test extension suggestions endpoint."""
         mock_response = Mock()
-        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "facetDistribution": {
+                "ext": {
+                    "txt": 500,
+                    "pdf": 300,
+                    "py": 200,
+                    "md": 100
+                }
+            }
+        }
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        # Test with problematic filename
-        rows = [
-            (
-                1,
-                "test",
-                "/data/test/Running 'nvm use x' should create and change the 'current' symlink",
-                "Running 'nvm use x' should create and change the 'current' symlink",
-                "Running 'nvm use x' should create and change the 'current' symlink",
-                "",
-                "/data/test",
-                100,
-                1000000,
-                1000,
-                1000,
-                755,
-                123456,
-            )
-        ]
-        indexer._bulk_upsert(rows)
+        response = client.get("/suggest")
+        assert response.status_code == 200
+        data = response.json()
+        assert "extensions" in data
+        extensions = data["extensions"]
+        assert len(extensions) == 4
+        # Should be sorted by count descending
+        assert extensions[0]["ext"] == "txt"
+        assert extensions[0]["count"] == 500
 
-        assert mock_post.called
-        args, kwargs = mock_post.call_args
+    def test_search_invalid_page(self):
+        """Test search with invalid page number."""
+        response = client.get("/search?page=0")
+        assert response.status_code == 422  # Validation error
 
-        # The query should contain escaped quotes using backslash
-        # When URL-encoded: \' becomes %5C%27 (backslash is %5C, quote is %27)
-        query_data = kwargs.get("data", "")
-        assert "%5C%27nvm+use+x%5C%27" in query_data or "\\'nvm use x\\'" in query_data
-        assert "%5C%27current%5C%27" in query_data or "\\'current\\'" in query_data
+    def test_search_excessive_page_size(self):
+        """Test search with page size exceeding maximum."""
+        response = client.get("/search?per_page=1000")
+        assert response.status_code == 422  # Validation error
 
-    @patch("requests.post")
-    def test_sweep_deletions(self, mock_post, indexer):
-        """Test deletion sweep."""
+    @patch('main.meili_session.post')
+    def test_search_empty_query(self, mock_post):
+        """Test search without query (browse all)."""
         mock_response = Mock()
-        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "hits": [],
+            "estimatedTotalHits": 0
+        }
         mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {"data": [{"deleted": 5}]}
         mock_post.return_value = mock_response
 
-        scan_id = int(time.time())
-        indexer._sweep_deletions(scan_id)
+        response = client.get("/search")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["query"] == ""
+        
+        # Should still call Meilisearch with empty query
+        call_args = mock_post.call_args
+        search_params = call_args[1]["json"]
+        assert search_params["q"] == ""
 
-        assert mock_post.called
-        args, kwargs = mock_post.call_args
-
-        if "json" in kwargs:
-            query = kwargs["json"]["query"]
-        else:
-            query = kwargs["data"]
-        assert (
-            f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query
-            or f"DELETE+FROM+files+WHERE+root%3D%27test%27+AND+seen_at+%3C+{scan_id}"
-            in query
-            or f"DELETE FROM files WHERE root=\\'test\\' AND seen_at < {scan_id}"
-            in query
-        )
-        assert indexer.stats["files_deleted"] == 5
-
-    def test_scan_directory(self, indexer):
-        """Test directory scanning."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create test files
-            test_files = []
-            for i in range(5):
-                filepath = os.path.join(tmpdir, f"test{i}.txt")
-                with open(filepath, "w") as f:
-                    f.write(f"content {i}")
-                # Set mtime to past to avoid stability window
-                os.utime(filepath, (time.time() - 100, time.time() - 100))
-                test_files.append(filepath)
-
-            # Create subdirectory with files
-            subdir = os.path.join(tmpdir, "subdir")
-            os.mkdir(subdir)
-            subfile = os.path.join(subdir, "subfile.py")
-            with open(subfile, "w") as f:
-                f.write("python code")
-            os.utime(subfile, (time.time() - 100, time.time() - 100))
-
-            # Scan directory
-            scan_id = int(time.time())
-            results = list(indexer._scan_directory(tmpdir, scan_id))
-
-            # Verify results
-            assert len(results) == 6  # 5 files + 1 subfile
-
-            # Check file metadata
-            basenames = [r[3] for r in results]
-            assert "test0.txt" in basenames
-            assert "subfile.py" in basenames
-
-            # Check extensions
-            extensions = [r[5] for r in results]
-            assert "txt" in extensions
-            assert "py" in extensions
-
-    def test_scan_directory_with_special_filenames(self, indexer):
-        """Test scanning directory with special characters in filenames."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create files with special characters
-            special_files = [
-                "file with spaces.txt",
-                "file's with apostrophe.txt",
-                "file-with-dashes.txt",
-                "file_with_underscores.txt",
-            ]
-
-            for filename in special_files:
-                filepath = os.path.join(tmpdir, filename)
-                with open(filepath, "w") as f:
-                    f.write("test content")
-                # Set mtime to past to avoid stability window
-                os.utime(filepath, (time.time() - 100, time.time() - 100))
-
-            # Scan directory
-            scan_id = int(time.time())
-            results = list(indexer._scan_directory(tmpdir, scan_id))
-
-            # Verify results
-            assert len(results) == len(special_files)
-
-            # Check that all special filenames were found
-            basenames = [r[3] for r in results]
-            for filename in special_files:
-                assert filename in basenames
+    def test_reindex_endpoint(self):
+        """Test manual reindex trigger."""
+        response = client.post("/reindex")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "pending"
+        assert "message" in data
