@@ -238,8 +238,11 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          docker compose -f docker-compose.test.yml down -v
-          rm -rf /tmp/meilisearch_test
+          docker compose -f docker-compose.test.yml down -v || true
+          # Relax permissions then remove
+          sudo chown -R $USER:$USER /tmp/meilisearch_test 2>/dev/null || true
+          sudo chmod -R u+rwX /tmp/meilisearch_test 2>/dev/null || true
+          sudo rm -rf /tmp/meilisearch_test || true
 
   # Security scanning
   security-scan:
@@ -371,5 +374,8 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          docker compose -f docker-compose.test.yml down -v
-          rm -rf /tmp/meilisearch_e2e tests/e2e/test_data
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml down -v || true
+            # Adjust ownership/permissions to allow deletion (Meilisearch may create root-owned 600 files)
+          sudo chown -R $USER:$USER /tmp/meilisearch_e2e 2>/dev/null || true
+          sudo chmod -R u+rwX /tmp/meilisearch_e2e 2>/dev/null || true
+          sudo rm -rf /tmp/meilisearch_e2e tests/e2e/test_data || true
