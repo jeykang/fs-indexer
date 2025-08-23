@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Bootstrap script to create and configure Meilisearch index."""
+"""Verbose bootstrap script to create and configure Meilisearch index.
+
+Adds structured JSON logging so CI/e2e runs can clearly surface the failing phase.
+"""
 
 import json
 import os
@@ -8,127 +11,158 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any, Dict
+
+# ---------------------------------------------------------------------------
+# Logging helpers (single-line JSON to simplify parsing / debugging)
+# ---------------------------------------------------------------------------
+VERBOSE = os.environ.get("BOOTSTRAP_VERBOSE", "1") != "0"
 
 
+def _log(level: str, msg: str, **fields: Any) -> None:
+    if not VERBOSE and level == "debug":
+        return
+    rec: Dict[str, Any] = {"level": level, "msg": msg, "ts": round(time.time(), 3)}
+    if fields:
+        rec.update(fields)
+    print(json.dumps(rec, separators=(",", ":")), flush=True)
+
+
+def info(msg: str, **fields: Any) -> None:
+    _log("info", msg, **fields)
+
+
+def debug(msg: str, **fields: Any) -> None:
+    _log("debug", msg, **fields)
+
+
+def warn(msg: str, **fields: Any) -> None:
+    _log("warn", msg, **fields)
+
+
+def error(msg: str, **fields: Any) -> None:
+    _log("error", msg, **fields)
+
+
+# ---------------------------------------------------------------------------
+# HTTP utilities
+# ---------------------------------------------------------------------------
 def make_request(
-    url: str, method: str = "GET", data: dict = None, headers: dict = None
+    url: str, method: str = "GET", data: dict | None = None, headers: dict | None = None
 ) -> dict:
-    """Make HTTP request to Meilisearch."""
     if headers is None:
         headers = {"Content-Type": "application/json"}
 
-    # Add master key if set
     master_key = os.environ.get("MEILI_MASTER_KEY")
     if master_key:
         headers["Authorization"] = f"Bearer {master_key}"
 
-    req_data = json.dumps(data).encode("utf-8") if data else None
-
+    req_data = json.dumps(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
 
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            if response.status == 204:  # No content
+            if response.status == 204:
                 return {}
-            return json.loads(response.read().decode("utf-8"))
+            body = response.read().decode("utf-8")
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                error("json_decode_error", url=url, body_preview=body[:200])
+                raise
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8")
-        print(f"HTTP Error {e.code}: {error_body}")
+        err_body = e.read().decode("utf-8", errors="replace")
+        error(
+            "http_error",
+            url=url,
+            code=e.code,
+            reason=e.reason,
+            body_preview=err_body[:500],
+        )
+        raise
+    except Exception as e:
+        error("request_exception", url=url, error=str(e))
         raise
 
 
-def wait_for_meilisearch(
-    base_url: str = "http://meilisearch:7700", retries: int = 30
-) -> bool:
-    """Wait for Meilisearch to be ready."""
-    print("Waiting for Meilisearch to be ready...")
-    for i in range(retries):
+# ---------------------------------------------------------------------------
+# Lifecycle helpers
+# ---------------------------------------------------------------------------
+def wait_for_meilisearch(base_url: str, retries: int = 30) -> bool:
+    info("waiting_for_meilisearch", base_url=base_url, retries=retries)
+    for attempt in range(1, retries + 1):
         try:
-            response = make_request(f"{base_url}/health")
-            if response.get("status") == "available":
-                print("Meilisearch is ready!")
+            resp = make_request(f"{base_url}/health")
+            if resp.get("status") == "available":
+                info("meilisearch_ready")
                 return True
-        except Exception as e:
-            print(f"Attempt {i + 1}/{retries}: Meilisearch not ready yet... ({e})")
-            time.sleep(2)
+        except Exception as e:  # noqa: BLE001
+            debug("meilisearch_not_ready", attempt=attempt, error=str(e))
+        time.sleep(2)
     return False
 
 
-def wait_for_task(base_url: str, task_uid: int, timeout: int = 60) -> bool:
-    """Wait for a Meilisearch task to complete."""
+def wait_for_task(base_url: str, task_uid: int, timeout: int = 120) -> bool:
     start = time.time()
+    debug("wait_for_task_start", task_uid=task_uid, timeout=timeout)
     while time.time() - start < timeout:
         try:
             task = make_request(f"{base_url}/tasks/{task_uid}")
             status = task.get("status")
-
             if status == "succeeded":
+                debug("task_succeeded", task_uid=task_uid)
                 return True
-            elif status == "failed":
-                # print(f"Task {task_uid} failed: {task.get('error')}")
-                # return False
+            if status == "failed":
                 err = task.get("error") or {}
-                # Meilisearch may enqueue and then fail a duplicate create with index_already_exists
+                # Accept index_already_exists as success for idempotency
                 if isinstance(err, dict) and err.get("code") == "index_already_exists":
-                    print(f"Task {task_uid} reports index already exists; continuing.")
+                    warn("task_failed_index_exists", task_uid=task_uid)
                     return True
-                print(f"Task {task_uid} failed: {err}")
+                error("task_failed", task_uid=task_uid, error=err)
                 return False
-
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error checking task status: {e}")
-            time.sleep(1)
-
-    print(f"Task {task_uid} timed out after {timeout} seconds")
+        except Exception as e:  # noqa: BLE001
+            warn("task_poll_error", task_uid=task_uid, error=str(e))
+        time.sleep(0.5)
+    error("task_timeout", task_uid=task_uid, timeout=timeout)
     return False
 
 
 def create_index(base_url: str) -> bool:
-    """Create the files index."""
-    print("Creating files index...")
-
+    info("create_index_start")
     try:
-        # Create index
-        # Fast path: if it already exists, skip creation
+        # Fast path: already exists
         try:
-            make_request(f"{base_url}/indexes/files")  # 200 if exists
-            print("Index already exists, skipping creation.")
+            make_request(f"{base_url}/indexes/files")
+            info("index_already_exists")
             return True
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
-        response = make_request(
-            f"{base_url}/indexes",
-            method="POST",
-            data={"uid": "files", "primaryKey": "id"},
+        resp = make_request(
+            f"{base_url}/indexes", method="POST", data={"uid": "files", "primaryKey": "id"}
         )
-        task_uid = response.get("taskUid")
-
-        if task_uid is not None and wait_for_task(base_url, int(task_uid)):
-            print("✓ Index created successfully")
+        task_uid = resp.get("taskUid")
+        if task_uid is None:
+            warn("index_create_missing_task_uid", raw=resp)
+            return False
+        if wait_for_task(base_url, int(task_uid)):
+            info("index_create_ok", task_uid=task_uid)
             return True
-
+        warn("index_create_task_failed", task_uid=task_uid)
     except urllib.error.HTTPError as e:
-        if e.code == 409:  # Index already exists
-            print("Index already exists, updating settings...")
+        if e.code == 409:
+            info("index_conflict_already_exists")
             return True
-        raise
-
+        error("index_create_http_error", code=e.code, reason=e.reason)
+    except Exception as e:  # noqa: BLE001
+        error("index_create_exception", error=str(e))
     return False
 
 
 def configure_index(base_url: str) -> bool:
-    """Configure index settings for optimal file search."""
-    print("Configuring index settings...")
-
+    info("configure_index_start")
     settings = {
-        # Fields that can be searched
-        "searchableAttributes": [
-            "basename",  # Primary search field
-            "path",  # Secondary search field
-        ],
-        # Fields that can be used in filters
+        "searchableAttributes": ["basename", "path"],
         "filterableAttributes": [
             "root",
             "ext",
@@ -140,9 +174,7 @@ def configure_index(base_url: str) -> bool:
             "mode",
             "seen_at",
         ],
-        # Fields that can be used for sorting
         "sortableAttributes": ["basename", "path", "size", "mtime", "seen_at"],
-        # Fields to return in search results
         "displayedAttributes": [
             "id",
             "root",
@@ -156,122 +188,95 @@ def configure_index(base_url: str) -> bool:
             "gid",
             "mode",
         ],
-        # Ranking rules (order matters!)
-        "rankingRules": [
-            "words",  # Number of words matched
-            "typo",  # Fewer typos = better
-            "proximity",  # Words close together
-            "attribute",  # Matches in basename > path
-            "sort",  # User-defined sort
-            "exactness",  # Exact matches preferred
-        ],
-        # Typo tolerance settings
-        "typoTolerance": {
-            "enabled": True,
-            "minWordSizeForTypos": {
-                "oneTypo": 4,  # Allow 1 typo for words >= 4 chars
-                "twoTypos": 8,  # Allow 2 typos for words >= 8 chars
-            },
-        },
-        # Pagination settings
-        "pagination": {"maxTotalHits": 100000},  # Maximum results for large datasets
+        "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness"],
+        "typoTolerance": {"enabled": True, "minWordSizeForTypos": {"oneTypo": 4, "twoTypos": 8}},
+        "pagination": {"maxTotalHits": 100000},
     }
-
     try:
-        response = make_request(
+        resp = make_request(
             f"{base_url}/indexes/files/settings", method="PATCH", data=settings
         )
-        task_uid = response.get("taskUid")
-
-        if task_uid is not None and wait_for_task(base_url, int(task_uid), timeout=120):
-            print("✓ Index settings configured")
+        task_uid = resp.get("taskUid")
+        if task_uid is None:
+            warn("settings_missing_task_uid", raw=resp)
+            return False
+        if wait_for_task(base_url, int(task_uid), timeout=180):
+            info("configure_index_ok", task_uid=task_uid)
             return True
-
-    except Exception as e:
-        print(f"Error configuring index: {e}")
-        return False
-
+        warn("configure_index_task_failed", task_uid=task_uid)
+    except Exception as e:  # noqa: BLE001
+        error("configure_index_exception", error=str(e))
     return False
 
 
 def test_index(base_url: str) -> bool:
-    """Test the index with a sample document."""
-    print("Testing index with sample document...")
-
-    # Add a test document
-    test_doc = {
+    info("test_index_start")
+    doc = {
         "id": 1,
         "root": "test",
-        "path": "/test/cargo-example.txt",
-        "basename": "cargo-example.txt",
+        "path": "/test/bootstrap-probe.txt",
+        "basename": "bootstrap-probe.txt",
         "ext": "txt",
         "dirpath": "/test",
-        "size": 1024,
+        "size": 1,
         "mtime": int(time.time()),
-        "uid": 1000,
-        "gid": 1000,
+        "uid": 0,
+        "gid": 0,
         "mode": 33188,
         "seen_at": int(time.time()),
     }
-
     try:
-        # Add document
-        response = make_request(
-            f"{base_url}/indexes/files/documents", method="POST", data=[test_doc]
+        resp = make_request(
+            f"{base_url}/indexes/files/documents", method="POST", data=[doc]
         )
-        task_uid = response.get("taskUid")
-
-        if not wait_for_task(base_url, task_uid):
-            print("✗ Failed to index test document")
+        task_uid = resp.get("taskUid")
+        if task_uid is None or not wait_for_task(base_url, int(task_uid)):
+            warn("test_index_add_failed", task_uid=task_uid)
             return False
-
-        # Wait a bit for indexing
         time.sleep(1)
-
-        # Test search
-        search_response = make_request(
-            f"{base_url}/indexes/files/search", method="POST", data={"q": "cargo"}
+        search = make_request(
+            f"{base_url}/indexes/files/search", method="POST", data={"q": "bootstrap"}
         )
-
-        if search_response.get("hits"):
-            print("✓ Search test passed - found test document")
-
-            # Clean up test document
-            delete_response = make_request(
+        hits = search.get("hits", [])
+        if hits:
+            info("test_index_search_ok", hits=len(hits))
+            # cleanup
+            del_resp = make_request(
                 f"{base_url}/indexes/files/documents/1", method="DELETE"
             )
-            wait_for_task(base_url, delete_response.get("taskUid"))
+            wait_for_task(base_url, del_resp.get("taskUid", 0))
             return True
-        else:
-            print("✗ Search test failed - no results")
-            return False
-
-    except Exception as e:
-        print(f"Error testing index: {e}")
-        return False
+        warn("test_index_search_no_hits")
+    except Exception as e:  # noqa: BLE001
+        warn("test_index_exception", error=str(e))
+    return False
 
 
-def main():
-    """Main bootstrap process."""
+def main() -> None:
     base_url = os.environ.get("MEILISEARCH_URL", "http://meilisearch:7700")
-
-    if not wait_for_meilisearch(base_url):
-        print("✗ Meilisearch is not available!")
+    info(
+        "bootstrap_start",
+        base_url=base_url,
+        master_key_present=bool(os.environ.get("MEILI_MASTER_KEY")),
+        verbose=VERBOSE,
+    )
+    try:
+        if not wait_for_meilisearch(base_url):
+            error("meilisearch_unavailable")
+            sys.exit(1)
+        if not create_index(base_url):
+            error("create_index_failed")
+            sys.exit(1)
+        if not configure_index(base_url):
+            error("configure_index_failed")
+            sys.exit(1)
+        if not test_index(base_url):
+            warn("test_index_failed_continuing")
+        info("bootstrap_complete")
+        sys.exit(0)
+    except Exception as e:  # noqa: BLE001
+        error("bootstrap_unhandled_exception", error=str(e))
         sys.exit(1)
-
-    if not create_index(base_url):
-        print("✗ Failed to create index!")
-        sys.exit(1)
-
-    if not configure_index(base_url):
-        print("✗ Failed to configure index!")
-        sys.exit(1)
-
-    if not test_index(base_url):
-        print("⚠ Index test failed, but continuing...")
-
-    print("✓ Bootstrap completed successfully!")
-    sys.exit(0)
 
 
 if __name__ == "__main__":
