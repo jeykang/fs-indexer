@@ -320,11 +320,35 @@ jobs:
         run: |
           docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml up -d
           sleep 15
+          echo "--- docker compose ps (initial) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml ps
+          echo "--- bootstrap logs (initial) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs bootstrap || true
+          echo "--- meilisearch logs (initial) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs meilisearch || true
+
+      - name: Verify bootstrap success before tests
+        run: |
+          set -e
+          STATUS=$(docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml ps --format json | jq -r '.[] | select(.Name=="fs-indexer-bootstrap-1" or .Name=="fs-indexer_test-bootstrap-1" or .Service=="bootstrap") | .State')
+          echo "Bootstrap container state: $STATUS"
+          if [ "$STATUS" != "running" ] && [ "$STATUS" != "exited (0)" ]; then
+            echo "Bootstrap did not complete successfully. Dumping logs...";
+            docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs bootstrap || true
+            docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs meilisearch || true
+            exit 1
+          fi
 
       - name: Run E2E tests
         run: |
           chmod +x tests/e2e/test_e2e.sh
           ENV_FILE=.env.e2e ./tests/e2e/test_e2e.sh
+
+      - name: Collect service logs on failure (E2E)
+        if: failure()
+        run: |
+          echo "--- Full service logs (failure) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs || true
 
       - name: Clean up
         if: always()

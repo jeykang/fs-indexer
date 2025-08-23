@@ -139,7 +139,9 @@ def create_index(base_url: str) -> bool:
             if e.code != 404:
                 raise
         resp = make_request(
-            f"{base_url}/indexes", method="POST", data={"uid": "files", "primaryKey": "id"}
+            f"{base_url}/indexes",
+            method="POST",
+            data={"uid": "files", "primaryKey": "id"},
         )
         task_uid = resp.get("taskUid")
         if task_uid is None:
@@ -188,8 +190,18 @@ def configure_index(base_url: str) -> bool:
             "gid",
             "mode",
         ],
-        "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness"],
-        "typoTolerance": {"enabled": True, "minWordSizeForTypos": {"oneTypo": 4, "twoTypos": 8}},
+        "rankingRules": [
+            "words",
+            "typo",
+            "proximity",
+            "attribute",
+            "sort",
+            "exactness",
+        ],
+        "typoTolerance": {
+            "enabled": True,
+            "minWordSizeForTypos": {"oneTypo": 4, "twoTypos": 8},
+        },
         "pagination": {"maxTotalHits": 100000},
     }
     try:
