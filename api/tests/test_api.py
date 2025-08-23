@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from main import app, SearchMode, SortOrder
+from main import app, SearchMode
 
 client = TestClient(app)
 
@@ -64,7 +64,7 @@ class TestSearchAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["query"] == "test"
-        assert data["mode"] == SearchMode.SUBSTR
+        assert data["mode"] == SearchMode.SUBSTR.value
         assert data["total"] == 1
         assert len(data["results"]) == 1
         assert data["results"][0]["basename"] == "file.txt"
@@ -86,8 +86,10 @@ class TestSearchAPI:
         call_args = mock_post.call_args
         search_params = call_args[1]["json"]
         assert "filter" in search_params
-        assert "ext" in search_params["filter"]
-        assert "size >=" in search_params["filter"]
+        # Check that the filter contains expected elements
+        filter_str = search_params["filter"]
+        assert "ext" in filter_str
+        assert "size >=" in filter_str
 
     @patch("main.meili_session.post")
     def test_search_regex_mode(self, mock_post):
@@ -125,7 +127,7 @@ class TestSearchAPI:
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        # Search for files with numbers in name
+        # Search for files with numbers in name - URL encoded regex
         response = client.get("/search?q=test[0-9]%2B&mode=regex")
         assert response.status_code == 200
         data = response.json()
@@ -174,16 +176,16 @@ class TestSearchAPI:
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        # Test each sort order
+        # Test each sort order - use the actual enum values
         sort_tests = [
-            (SortOrder.MTIME_DESC, ["mtime:desc"]),
-            (SortOrder.SIZE_ASC, ["size:asc"]),
-            (SortOrder.PATH_DESC, ["path:desc"]),
+            ("mtime_desc", ["mtime:desc"]),
+            ("size_asc", ["size:asc"]),
+            ("path_desc", ["path:desc"]),
         ]
 
         for sort_order, expected_sort in sort_tests:
             response = client.get(f"/search?sort={sort_order}")
-            assert response.status_code == 200
+            assert response.status_code == 200, f"Failed for sort order: {sort_order}"
 
             call_args = mock_post.call_args
             search_params = call_args[1]["json"]
@@ -272,3 +274,54 @@ class TestSearchAPI:
         data = response.json()
         assert data["status"] == "pending"
         assert "message" in data
+
+    @patch("main.meili_session.post")
+    def test_search_with_special_chars_in_query(self, mock_post):
+        """Test search with special characters in query."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"hits": [], "estimatedTotalHits": 0}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Test with various special characters
+        special_queries = ["test's", "file-name", "path/to/file", "[test]", "(test)"]
+
+        for query in special_queries:
+            response = client.get(f"/search?q={query}")
+            assert response.status_code == 200
+
+    @patch("main.meili_session.post")
+    def test_search_with_multiple_extensions(self, mock_post):
+        """Test search with multiple extension filters."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"hits": [], "estimatedTotalHits": 0}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        response = client.get("/search?ext=txt&ext=pdf&ext=doc")
+        assert response.status_code == 200
+
+        call_args = mock_post.call_args
+        search_params = call_args[1]["json"]
+        filter_str = search_params["filter"]
+        # Should create an OR condition for extensions
+        assert "ext = " in filter_str
+        assert "OR" in filter_str
+
+    @patch("main.meili_session.post")
+    def test_search_error_handling(self, mock_post):
+        """Test search error handling."""
+        mock_post.side_effect = Exception("Meilisearch connection error")
+
+        response = client.get("/search?q=test")
+        assert response.status_code == 500
+        assert "Search failed" in response.json()["detail"]
+
+    @patch("main.meili_session.get")
+    def test_stats_error_handling(self, mock_get):
+        """Test stats endpoint error handling."""
+        mock_get.side_effect = Exception("Connection error")
+
+        response = client.get("/stats")
+        assert response.status_code == 500
+        assert "Failed to get stats" in response.json()["detail"]
