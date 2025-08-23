@@ -1,8 +1,6 @@
 """Unit tests for the filesystem indexer."""
 
 import os
-
-# Import the indexer module
 import sys
 import tempfile
 import time
@@ -21,7 +19,8 @@ fake = Faker()
 def config():
     """Create test configuration."""
     return Config(
-        manticore_url="http://localhost:7700/sql?mode=raw",
+        meilisearch_url="http://localhost:7700",
+        master_key="test_key",
         scan_roots=["/test/data"],
         root_name="test",
         excludes_file="/tmp/excludes.txt",
@@ -51,34 +50,9 @@ class TestFileIndexer:
         id3 = indexer._compute_file_id(1001, 2000)
         assert id1 != id3
 
-    def test_escape_sql_string(self, indexer):
-        """Test SQL string escaping with complex cases."""
-        # Test single quotes
-        assert indexer._escape_sql_string("test's file") == "test\\'s file"
-        assert (
-            indexer._escape_sql_string("Running 'nvm use x' should work")
-            == "Running \\'nvm use x\\' should work"
-        )
-
-        # Test backslashes
-        assert (
-            indexer._escape_sql_string("C:\\test\\file.txt") == "C:\\\\test\\\\file.txt"
-        )
-
-        # Test special characters
-        assert indexer._escape_sql_string("line1\nline2") == "line1\\nline2"
-        assert indexer._escape_sql_string("tab\there") == "tab\\there"
-
-        # Test complex case with multiple quotes
-        assert (
-            indexer._escape_sql_string(
-                "Running 'nvm use x' should create and change the 'current' symlink"
-            )
-            == "Running \\'nvm use x\\' should create and change the \\'current\\' symlink"
-        )
-
-        # Test null bytes are removed
-        assert indexer._escape_sql_string("test\x00file") == "testfile"
+        # Test that IDs are positive integers
+        assert id1 > 0
+        assert isinstance(id1, int)
 
     def test_is_excluded(self, indexer):
         """Test exclusion pattern matching."""
@@ -112,125 +86,107 @@ class TestFileIndexer:
         finally:
             os.unlink(excludes_file)
 
-    @patch("requests.post")
-    def test_bulk_upsert(self, mock_post, indexer):
-        """Test bulk upsert to Manticore."""
+    @patch("requests.Session.post")
+    def test_add_documents(self, mock_post, indexer):
+        """Test adding documents to Meilisearch."""
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.json.return_value = {"taskUid": 123}
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        rows = [
-            (
-                1,
-                "test",
-                "/path/file1.txt",
-                "file1.txt",
-                "file1.txt",
-                "txt",
-                "/path",
-                100,
-                1000000,
-                1000,
-                1000,
-                755,
-                123456,
-            ),
-            (
-                2,
-                "test",
-                "/path/file2.py",
-                "file2.py",
-                "file2.py",
-                "py",
-                "/path",
-                200,
-                2000000,
-                1000,
-                1000,
-                755,
-                123456,
-            ),
+        documents = [
+            {
+                "id": 1,
+                "root": "test",
+                "path": "/path/file1.txt",
+                "basename": "file1.txt",
+                "ext": "txt",
+                "dirpath": "/path",
+                "size": 100,
+                "mtime": 1000000,
+                "uid": 1000,
+                "gid": 1000,
+                "mode": 755,
+                "seen_at": 123456,
+            },
+            {
+                "id": 2,
+                "root": "test",
+                "path": "/path/file2.py",
+                "basename": "file2.py",
+                "ext": "py",
+                "dirpath": "/path",
+                "size": 200,
+                "mtime": 2000000,
+                "uid": 1000,
+                "gid": 1000,
+                "mode": 755,
+                "seen_at": 123456,
+            },
         ]
-        indexer._bulk_upsert(rows)
+
+        task_uid = indexer.client.add_documents(documents)
 
         assert mock_post.called
         args, kwargs = mock_post.call_args
 
         # Verify the correct URL was called
-        assert args[0] == indexer.config.manticore_url
+        assert args[0] == f"{indexer.config.meilisearch_url}/indexes/files/documents"
 
-        # Extract the SQL from either JSON or form-encoded data
-        if "json" in kwargs:
-            query = kwargs["json"]["query"]
-        else:
-            # kwargs["data"] is a URL-encoded string like "query=REPLACE+INTO..."
-            query = kwargs["data"]
-        assert "REPLACE INTO files" in query or "REPLACE+INTO+files" in query
+        # Verify the documents were passed
+        assert kwargs["json"] == documents
+        assert task_uid == 123
 
-    @patch("requests.post")
-    def test_bulk_upsert_with_special_chars(self, mock_post, indexer):
-        """Test bulk upsert with filenames containing special characters."""
+    @patch("requests.Session.post")
+    def test_delete_documents(self, mock_post, indexer):
+        """Test deleting documents from Meilisearch."""
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.json.return_value = {"taskUid": 456}
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        # Test with problematic filename
-        rows = [
-            (
-                1,
-                "test",
-                "/data/test/Running 'nvm use x' should create and change the 'current' symlink",
-                "Running 'nvm use x' should create and change the 'current' symlink",
-                "Running 'nvm use x' should create and change the 'current' symlink",
-                "",
-                "/data/test",
-                100,
-                1000000,
-                1000,
-                1000,
-                755,
-                123456,
-            )
-        ]
-        indexer._bulk_upsert(rows)
+        filter_str = 'root = "test" AND seen_at < 123456'
+        task_uid = indexer.client.delete_documents(filter_str)
 
         assert mock_post.called
         args, kwargs = mock_post.call_args
 
-        # The query should contain escaped quotes using backslash
-        query_data = kwargs.get("data", "")
-        assert "%5C%27nvm+use+x%5C%27" in query_data or "\\'nvm use x\\'" in query_data
-        assert "%5C%27current%5C%27" in query_data or "\\'current\\'" in query_data
+        # Verify the correct URL was called
+        assert args[0] == f"{indexer.config.meilisearch_url}/indexes/files/documents/delete"
 
-    @patch("requests.post")
+        # Verify the filter was passed
+        assert kwargs["json"] == {"filter": filter_str}
+        assert task_uid == 456
+
+    @patch("requests.Session.post")
     def test_sweep_deletions(self, mock_post, indexer):
         """Test deletion sweep."""
+        # Mock the delete response
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.json.return_value = {"taskUid": 789}
         mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {"data": [{"deleted": 5}]}
-        mock_post.return_value = mock_response
+        
+        # Mock the task status check
+        mock_get_response = Mock()
+        mock_get_response.status_code = 200
+        mock_get_response.json.return_value = {"status": "succeeded"}
+        mock_get_response.raise_for_status = Mock()
+        
+        with patch("requests.Session.get", return_value=mock_get_response):
+            mock_post.return_value = mock_response
+            
+            scan_id = int(time.time())
+            indexer._sweep_deletions(scan_id)
 
-        scan_id = int(time.time())
-        indexer._sweep_deletions(scan_id)
+            assert mock_post.called
+            args, kwargs = mock_post.call_args
 
-        assert mock_post.called
-        args, kwargs = mock_post.call_args
-
-        if "json" in kwargs:
-            query = kwargs["json"]["query"]
-        else:
-            query = kwargs["data"]
-        assert (
-            f"DELETE FROM files WHERE root='test' AND seen_at < {scan_id}" in query
-            or f"DELETE+FROM+files+WHERE+root%3D%27test%27+AND+seen_at+%3C+{scan_id}"
-            in query
-            or f"DELETE FROM files WHERE root=\\'test\\' AND seen_at < {scan_id}"
-            in query
-        )
-        assert indexer.stats["files_deleted"] == 5
+            # Verify the filter format
+            expected_filter = f'root = "{indexer.config.root_name}" AND seen_at < {scan_id}'
+            assert kwargs["json"]["filter"] == expected_filter
 
     def test_scan_directory(self, indexer):
         """Test directory scanning."""
@@ -261,14 +217,27 @@ class TestFileIndexer:
             assert len(results) == 6  # 5 files + 1 subfile
 
             # Check file metadata
-            basenames = [r[3] for r in results]
+            basenames = [r["basename"] for r in results]
             assert "test0.txt" in basenames
             assert "subfile.py" in basenames
 
             # Check extensions
-            extensions = [r[5] for r in results]
+            extensions = [r["ext"] for r in results]
             assert "txt" in extensions
             assert "py" in extensions
+
+            # Check all documents have required fields
+            for doc in results:
+                assert "id" in doc
+                assert "root" in doc
+                assert "path" in doc
+                assert "basename" in doc
+                assert "ext" in doc
+                assert "dirpath" in doc
+                assert "size" in doc
+                assert "mtime" in doc
+                assert "seen_at" in doc
+                assert doc["seen_at"] == scan_id
 
     def test_scan_directory_with_special_filenames(self, indexer):
         """Test scanning directory with special characters in filenames."""
@@ -279,6 +248,8 @@ class TestFileIndexer:
                 "file's with apostrophe.txt",
                 "file-with-dashes.txt",
                 "file_with_underscores.txt",
+                "file[with]brackets.txt",
+                "file(with)parens.txt",
             ]
 
             for filename in special_files:
@@ -296,6 +267,66 @@ class TestFileIndexer:
             assert len(results) == len(special_files)
 
             # Check that all special filenames were found
-            basenames = [r[3] for r in results]
+            basenames = [r["basename"] for r in results]
             for filename in special_files:
                 assert filename in basenames
+
+    @patch("requests.Session.post")
+    def test_index_batch(self, mock_post, indexer):
+        """Test batch indexing."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"taskUid": 999}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        documents = [
+            {"id": i, "basename": f"file{i}.txt", "path": f"/test/file{i}.txt"}
+            for i in range(10)
+        ]
+
+        indexer._index_batch(documents)
+
+        assert mock_post.called
+        assert indexer.stats["files_indexed"] == 10
+        assert 999 in indexer.pending_tasks
+
+    @patch("requests.Session.get")
+    def test_wait_for_task(self, mock_get, indexer):
+        """Test waiting for task completion."""
+        # Simulate task progression
+        responses = [
+            {"status": "enqueued"},
+            {"status": "processing"},
+            {"status": "succeeded"},
+        ]
+        mock_get.side_effect = [
+            Mock(json=lambda: resp, raise_for_status=Mock(), status_code=200)
+            for resp in responses
+        ]
+
+        result = indexer.client.wait_for_task(123, timeout=10)
+        assert result is True
+        assert mock_get.call_count == 3
+
+    @patch("requests.Session.get")
+    def test_wait_for_task_failure(self, mock_get, indexer):
+        """Test handling task failure."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"status": "failed", "error": "Test error"}
+        mock_response.raise_for_status = Mock()
+        mock_response.status_code = 200
+        mock_get.return_value = mock_response
+
+        result = indexer.client.wait_for_task(123, timeout=10)
+        assert result is False
+
+    def test_exclude_patterns_with_directories(self, indexer):
+        """Test exclusion patterns with directory structures."""
+        indexer.excludes = ["**/build/**", "**/dist/**", "*.pyc"]
+
+        assert indexer._is_excluded("project/build/output.js")
+        assert indexer._is_excluded("src/dist/bundle.js")
+        assert indexer._is_excluded("module.pyc")
+        assert not indexer._is_excluded("src/main.py")
+        assert not indexer._is_excluded("project/src/index.js")
