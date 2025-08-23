@@ -64,8 +64,7 @@ class MeilisearchOps:
     def update_settings(self, settings: Dict[str, Any]) -> bool:
         """Update index settings."""
         response = self.session.patch(
-            f"{self.url}/indexes/files/settings",
-            json=settings
+            f"{self.url}/indexes/files/settings", json=settings
         )
         if response.status_code in [200, 202]:
             task_uid = response.json().get("taskUid")
@@ -98,8 +97,7 @@ class MeilisearchOps:
     def search_sample(self, query: str = "", limit: int = 10) -> Dict[str, Any]:
         """Perform a sample search."""
         response = self.session.post(
-            f"{self.url}/indexes/files/search",
-            json={"q": query, "limit": limit}
+            f"{self.url}/indexes/files/search", json={"q": query, "limit": limit}
         )
         if response.status_code == 404:
             return {"error": "Index 'files' not found"}
@@ -125,8 +123,7 @@ class MeilisearchOps:
 
         # Recreate index
         create_response = self.session.post(
-            f"{self.url}/indexes",
-            json={"uid": "files", "primaryKey": "id"}
+            f"{self.url}/indexes", json={"uid": "files", "primaryKey": "id"}
         )
         if create_response.status_code == 202:
             task_uid = create_response.json().get("taskUid")
@@ -137,21 +134,29 @@ class MeilisearchOps:
         settings = {
             "searchableAttributes": ["basename", "path"],
             "filterableAttributes": [
-                "root", "ext", "dirpath", "size", "mtime",
-                "uid", "gid", "mode", "seen_at"
+                "root",
+                "ext",
+                "dirpath",
+                "size",
+                "mtime",
+                "uid",
+                "gid",
+                "mode",
+                "seen_at",
             ],
             "sortableAttributes": ["basename", "path", "size", "mtime"],
             "rankingRules": [
-                "words", "typo", "proximity", "attribute",
-                "sort", "exactness"
+                "words",
+                "typo",
+                "proximity",
+                "attribute",
+                "sort",
+                "exactness",
             ],
             "typoTolerance": {
                 "enabled": True,
-                "minWordSizeForTypos": {
-                    "oneTypo": 4,
-                    "twoTypos": 8
-                }
-            }
+                "minWordSizeForTypos": {"oneTypo": 4, "twoTypos": 8},
+            },
         }
         return self.update_settings(settings)
 
@@ -169,13 +174,17 @@ class MeilisearchOps:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Meilisearch operations helper")
-    parser.add_argument("--url", help="Meilisearch URL", 
-                        default=os.environ.get("MEILISEARCH_URL", "http://localhost:7700"))
-    parser.add_argument("--key", help="Master key",
-                        default=os.environ.get("MEILI_MASTER_KEY", ""))
-    
+    parser.add_argument(
+        "--url",
+        help="Meilisearch URL",
+        default=os.environ.get("MEILISEARCH_URL", "http://localhost:7700"),
+    )
+    parser.add_argument(
+        "--key", help="Master key", default=os.environ.get("MEILI_MASTER_KEY", "")
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
-    
+
     # Add subcommands
     subparsers.add_parser("health", help="Check health")
     subparsers.add_parser("stats", help="Get index statistics")
@@ -184,33 +193,36 @@ def main():
     subparsers.add_parser("reset", help="Reset index")
     subparsers.add_parser("tasks", help="List recent tasks")
     subparsers.add_parser("optimize", help="Optimize index (info only)")
-    
+
     search_parser = subparsers.add_parser("search", help="Sample search")
     search_parser.add_argument("query", nargs="?", default="", help="Search query")
     search_parser.add_argument("--limit", type=int, default=10, help="Result limit")
-    
+
     export_parser = subparsers.add_parser("export", help="Export documents")
-    export_parser.add_argument("--limit", type=int, default=1000, help="Number of documents")
+    export_parser.add_argument(
+        "--limit", type=int, default=1000, help="Number of documents"
+    )
     export_parser.add_argument("--offset", type=int, default=0, help="Offset")
     export_parser.add_argument("--output", help="Output file (JSON)")
-    
+
     delete_parser = subparsers.add_parser("delete-all", help="Delete all documents")
-    delete_parser.add_argument("--confirm", action="store_true", 
-                                help="Confirm deletion")
-    
+    delete_parser.add_argument(
+        "--confirm", action="store_true", help="Confirm deletion"
+    )
+
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
-    
+
     ops = MeilisearchOps(args.url, args.key)
-    
+
     try:
         if args.command == "health":
             result = ops.health_check()
             print(json.dumps(result, indent=2))
-        
+
         elif args.command == "stats":
             result = ops.get_stats()
             if "error" not in result:
@@ -222,32 +234,34 @@ def main():
                         print(f"  {field}: {count}")
             else:
                 print(result["error"])
-        
+
         elif args.command == "settings":
             result = ops.get_settings()
             print(json.dumps(result, indent=2))
-        
+
         elif args.command == "dump":
             result = ops.create_dump()
             print(result)
-        
+
         elif args.command == "reset":
             print("Resetting index...")
             if ops.reset_index():
                 print("Index reset successfully")
             else:
                 print("Failed to reset index")
-        
+
         elif args.command == "tasks":
             result = ops.get_tasks()
             print(f"Recent tasks ({result.get('total', 0)} total):")
             for task in result.get("results", [])[:10]:
-                print(f"  [{task['uid']}] {task['type']} - {task['status']} "
-                      f"({task.get('duration', 'N/A')})")
-        
+                print(
+                    f"  [{task['uid']}] {task['type']} - {task['status']} "
+                    f"({task.get('duration', 'N/A')})"
+                )
+
         elif args.command == "optimize":
             print(ops.optimize_index())
-        
+
         elif args.command == "search":
             result = ops.search_sample(args.query, args.limit)
             if "error" not in result:
@@ -258,7 +272,7 @@ def main():
                     print(f"  - {hit.get('path', 'N/A')}")
             else:
                 print(result["error"])
-        
+
         elif args.command == "export":
             documents = ops.export_documents(args.limit, args.offset)
             if args.output:
@@ -267,7 +281,7 @@ def main():
                 print(f"Exported {len(documents)} documents to {args.output}")
             else:
                 print(json.dumps(documents, indent=2))
-        
+
         elif args.command == "delete-all":
             if not args.confirm:
                 print("This will delete ALL documents from the index!")
@@ -277,7 +291,7 @@ def main():
                 print("All documents deleted successfully")
             else:
                 print("Failed to delete documents")
-        
+
     except requests.RequestException as e:
         print(f"Error: {e}")
         sys.exit(1)

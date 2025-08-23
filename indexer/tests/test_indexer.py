@@ -154,7 +154,10 @@ class TestFileIndexer:
         args, kwargs = mock_post.call_args
 
         # Verify the correct URL was called
-        assert args[0] == f"{indexer.config.meilisearch_url}/indexes/files/documents/delete"
+        assert (
+            args[0]
+            == f"{indexer.config.meilisearch_url}/indexes/files/documents/delete"
+        )
 
         # Verify the filter was passed
         assert kwargs["json"] == {"filter": filter_str}
@@ -168,16 +171,16 @@ class TestFileIndexer:
         mock_response.status_code = 200
         mock_response.json.return_value = {"taskUid": 789}
         mock_response.raise_for_status = Mock()
-        
+
         # Mock the task status check
         mock_get_response = Mock()
         mock_get_response.status_code = 200
         mock_get_response.json.return_value = {"status": "succeeded"}
         mock_get_response.raise_for_status = Mock()
-        
+
         with patch("requests.Session.get", return_value=mock_get_response):
             mock_post.return_value = mock_response
-            
+
             scan_id = int(time.time())
             indexer._sweep_deletions(scan_id)
 
@@ -185,7 +188,9 @@ class TestFileIndexer:
             args, kwargs = mock_post.call_args
 
             # Verify the filter format
-            expected_filter = f'root = "{indexer.config.root_name}" AND seen_at < {scan_id}'
+            expected_filter = (
+                f'root = "{indexer.config.root_name}" AND seen_at < {scan_id}'
+            )
             assert kwargs["json"]["filter"] == expected_filter
 
     def test_scan_directory(self, indexer):
