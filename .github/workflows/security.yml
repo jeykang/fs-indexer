@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Grype scanner
-        uses: anchore/scan-action@v3
+        uses: anchore/scan-action@v6
         with:
           path: "."
           fail-build: false
