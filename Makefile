@@ -19,7 +19,7 @@ test-integration: build ## Run integration tests
 	@echo "Running integration tests..."
 	docker compose -f docker-compose.test.yml up -d
 	sleep 10
-	docker compose -f docker-compose.test.yml run --rm indexer
+	docker compose -f docker-compose.test.yml run --no-deps --rm indexer
 	python -m pytest tests/integration/ -v
 	docker compose -f docker-compose.test.yml down -v
 

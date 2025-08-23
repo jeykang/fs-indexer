@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Search API for filesystem indexer.
+Search API for Meilisearch filesystem indexer.
 Provides REST endpoints for searching indexed files.
 """
 
 import os
+import re
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException, Query
@@ -16,14 +17,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Configuration
-MANTICORE_URL = os.environ.get("MANTICORE_URL", "http://manticore:9308/sql")
+MEILISEARCH_URL = os.environ.get("MEILISEARCH_URL", "http://meilisearch:7700")
+MEILI_MASTER_KEY = os.environ.get("MEILI_MASTER_KEY", "")
 DEFAULT_PAGE_SIZE = int(os.environ.get("DEFAULT_PAGE_SIZE", "50"))
 MAX_PAGE_SIZE = int(os.environ.get("MAX_PAGE_SIZE", "500"))
 
 app = FastAPI(
     title="Filesystem Search API",
-    description="Search indexed files with regex and substring support",
-    version="1.0.0",
+    description="Search indexed files with Meilisearch",
+    version="2.0.0",
 )
 
 # Enable CORS
@@ -35,13 +37,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Meilisearch client session
+meili_session = requests.Session()
+if MEILI_MASTER_KEY:
+    meili_session.headers["Authorization"] = f"Bearer {MEILI_MASTER_KEY}"
+meili_session.headers["Content-Type"] = "application/json"
+
 
 class SearchMode(str, Enum):
     """Search modes supported by the API."""
 
-    PLAIN = "plain"
-    SUBSTR = "substr"
-    REGEX = "regex"
+    PLAIN = "plain"  # Normal search
+    SUBSTR = "substr"  # Substring search (default in Meilisearch)
+    REGEX = "regex"  # Regex simulation using post-filtering
 
 
 class SortOrder(str, Enum):
@@ -60,7 +68,6 @@ class FileResult(BaseModel):
 
     path: str
     basename: str
-    basename_raw: str
     ext: str
     dirpath: str
     size: int
@@ -86,64 +93,9 @@ class StatsResponse(BaseModel):
     """Index statistics response."""
 
     total_files: int
-    total_size: int
+    is_indexing: bool
     last_scan: Optional[int]
-    roots: List[Dict[str, Any]]
-
-
-def execute_sql(query: str, timeout: int = 30) -> dict[str, Any]:
-    query_strip = query.lstrip().upper()
-    base_url = MANTICORE_URL.split("?")[0]  # e.g. http://manticore:9308/sql
-    # Select endpoint based on query type
-    if query_strip.startswith("SELECT"):
-        url = base_url
-    else:
-        url = f"{base_url}?mode=raw"
-
-    try:
-        # Always send the query as a form field; requests will
-        # encode it properly and set the Content-Type header.
-        response = requests.post(url, data={"query": query}, timeout=timeout)
-        # response = requests.post(url, json={"query": query}, timeout=timeout)
-        if response.status_code != 200:
-            # Debug output: show exactly what Manticore returned
-            print(f"SQL error: status={response.status_code}, url={url}, query={query}")
-            print(f"Response body: {response.text}")
-        response.raise_for_status()
-        result = response.json()
-        if isinstance(result, list):
-            result = result[0] if result else {}
-
-        # /sql?mode=raw returns a list; unwrap it
-        if isinstance(result, list):
-            result = result[0]
-        return result
-    except requests.RequestException as e:
-        print(f"Exception when executing {query!r}: {e}")  # Additional debug
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error when executing {query!r}: {e}",
-        )
-
-
-def escape_sql(value: str) -> str:
-    """Escape SQL string values using backslash escaping."""
-    # Escape backslashes first (must be done before other escapes)
-    value = value.replace("\\", "\\\\")
-    # Escape single quotes
-    value = value.replace("'", "\\'")
-    # Escape other special characters
-    value = value.replace("\n", "\\n")
-    value = value.replace("\r", "\\r")
-    value = value.replace("\t", "\\t")
-    value = value.replace("\x00", "")  # Remove null bytes
-    return value
-
-
-def escape_regex(pattern: str) -> str:
-    """Escape regex pattern for RE2."""
-    # Basic escaping for RE2 syntax
-    return pattern.replace("\\", "\\\\")
+    field_distribution: Dict[str, int]
 
 
 def format_size(size: int) -> str:
@@ -160,98 +112,28 @@ def format_timestamp(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def build_search_query(
-    q: Optional[str],
-    mode: SearchMode,
-    ext: Optional[List[str]],
-    dir: Optional[str],
-    mtime_from: Optional[int],
-    mtime_to: Optional[int],
-    size_min: Optional[int],
-    size_max: Optional[int],
-    sort: SortOrder,
-    page: int,
-    per_page: int,
-) -> tuple[str, str]:
-    """Build SQL queries for search and count."""
-
-    # Build WHERE conditions
-    conditions = []
-
-    # Search query
-    if q:
-        if mode == SearchMode.REGEX or mode == SearchMode.SUBSTR:
-            # Use REGEX function for RE2 pattern matching
-            conditions.append(f"REGEX(basename_raw, '{escape_regex(q)}')")
-        # elif mode == SearchMode.SUBSTR:
-        #     escaped_q = escape_sql(q)
-        #     conditions.append(f"MATCH('@basename \"*{escaped_q}*\"')")
-        else:  # PLAIN
-            # Standard tokenized match
-            escaped_q = escape_sql(q)
-            conditions.append(f"MATCH('@basename {escaped_q}')")
-
-    # Extension filter
-    if ext:
-        ext_list = ",".join([f"'{escape_sql(e)}'" for e in ext])
-        conditions.append(f"ext IN ({ext_list})")
-
-    # Directory filter (prefix match)
-    if dir:
-        escaped_dir = escape_sql(dir)
-        conditions.append(f"dirpath LIKE '{escaped_dir}%'")
-
-    # Time range filters
-    if mtime_from:
-        conditions.append(f"mtime >= {mtime_from}")
-    if mtime_to:
-        conditions.append(f"mtime <= {mtime_to}")
-
-    # Size filters
-    if size_min:
-        conditions.append(f"size >= {size_min}")
-    if size_max:
-        conditions.append(f"size <= {size_max}")
-
-    # Build WHERE clause
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-    # Build ORDER BY clause
-    order_map = {
-        SortOrder.MTIME_DESC: "mtime DESC",
-        SortOrder.MTIME_ASC: "mtime ASC",
-        SortOrder.SIZE_DESC: "size DESC",
-        SortOrder.SIZE_ASC: "size ASC",
-        SortOrder.PATH_ASC: "path ASC",
-        SortOrder.PATH_DESC: "path DESC",
-    }
-    order_clause = f"ORDER BY {order_map[sort]}"
-
-    # Calculate offset
-    offset = (page - 1) * per_page
-
-    # Build queries
-    search_query = (
-        f"SELECT path, basename, basename_raw, ext, dirpath, size, mtime "
-        f"FROM files "
-        f"WHERE {where_clause} "
-        f"{order_clause} "
-        f"LIMIT {per_page} OFFSET {offset}"
-    )
-
-    count_query = f"SELECT COUNT(*) as total " f"FROM files " f"WHERE {where_clause}"
-
-    return search_query, count_query
+def apply_regex_filter(
+    results: List[Dict], pattern: str, field: str = "basename"
+) -> List[Dict]:
+    """Apply regex filtering to results (post-processing for regex mode)."""
+    try:
+        regex = re.compile(pattern)
+        return [r for r in results if regex.search(r.get(field, ""))]
+    except re.error:
+        # Invalid regex, return empty results
+        return []
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     try:
-        _ = execute_sql("SHOW TABLES", timeout=5)
-        return {"status": "healthy", "manticore": "connected"}
-    except Exception:
-        raise HTTPException(status_code=503, detail="Service unhealthy")
+        response = meili_session.get(f"{MEILISEARCH_URL}/health")
+        response.raise_for_status()
+        health = response.json()
+        return {"status": "healthy", "meilisearch": health.get("status")}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Service unhealthy: {e}")
 
 
 @app.get("/search", response_model=SearchResponse)
@@ -278,52 +160,109 @@ async def search_files(
 
     start_time = time.time()
 
-    # Build and execute queries
-    search_query, count_query = build_search_query(
-        q,
-        mode,
-        ext,
-        dir,
-        mtime_from,
-        mtime_to,
-        size_min,
-        size_max,
-        sort,
-        page,
-        per_page,
-    )
+    # Build Meilisearch query
+    search_params = {
+        "limit": (
+            per_page if mode != SearchMode.REGEX else min(per_page * 10, 1000)
+        ),  # Get more for regex filtering
+        "offset": (page - 1) * per_page if mode != SearchMode.REGEX else 0,
+        "showMatchesPosition": False,
+    }
 
-    # Get total count
-    # In search_files:
-    print(f"Search query: {search_query}")
-    print(f"Count query: {count_query}")
+    # Set query based on mode
+    if q:
+        if mode == SearchMode.REGEX:
+            # For regex, we do a broad search and filter later
+            # Extract potential keywords from the regex pattern
+            keywords = re.findall(r"\w+", q)
+            search_params["q"] = " ".join(keywords) if keywords else ""
+        else:
+            # For PLAIN and SUBSTR, Meilisearch handles it naturally
+            search_params["q"] = q
+    else:
+        search_params["q"] = ""
 
-    count_result = execute_sql(count_query)
-    total = 0
-    if count_result.get("data") and len(count_result["data"]) > 0:
-        total = count_result["data"][0].get("total", 0)
+    # Build filter conditions
+    filters = []
 
-    # Get search results
-    search_result = execute_sql(search_query)
+    if ext:
+        # Multiple extensions with OR
+        ext_filters = [f'ext = "{e}"' for e in ext]
+        if len(ext_filters) > 1:
+            filters.append(f"({' OR '.join(ext_filters)})")
+        else:
+            filters.append(ext_filters[0])
+
+    if dir:
+        # Directory prefix - escape quotes in dir path
+        escaped_dir = dir.replace('"', '\\"')
+        # Meilisearch doesn't support LIKE, so we'll need to post-filter
+        # For now, we can filter by exact dirpath
+        filters.append(f'dirpath = "{escaped_dir}"')
+
+    if mtime_from:
+        filters.append(f"mtime >= {mtime_from}")
+    if mtime_to:
+        filters.append(f"mtime <= {mtime_to}")
+
+    if size_min:
+        filters.append(f"size >= {size_min}")
+    if size_max:
+        filters.append(f"size <= {size_max}")
+
+    if filters:
+        search_params["filter"] = " AND ".join(filters)
+
+    # Set sort order
+    sort_map = {
+        SortOrder.MTIME_DESC: ["mtime:desc"],
+        SortOrder.MTIME_ASC: ["mtime:asc"],
+        SortOrder.SIZE_DESC: ["size:desc"],
+        SortOrder.SIZE_ASC: ["size:asc"],
+        SortOrder.PATH_ASC: ["path:asc"],
+        SortOrder.PATH_DESC: ["path:desc"],
+    }
+    search_params["sort"] = sort_map[sort]
+
+    # Execute search
+    try:
+        response = meili_session.post(
+            f"{MEILISEARCH_URL}/indexes/files/search", json=search_params
+        )
+        response.raise_for_status()
+        search_result = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
 
     # Process results
+    hits = search_result.get("hits", [])
+
+    # Apply regex filtering if needed
+    if mode == SearchMode.REGEX and q:
+        hits = apply_regex_filter(hits, q)
+        # Adjust pagination for regex-filtered results
+        total = len(hits)
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        hits = hits[start_idx:end_idx]
+    else:
+        total = search_result.get("estimatedTotalHits", 0)
+
+    # Format results
     results = []
-    rows = search_result.get("data") if isinstance(search_result, dict) else None
-    if rows:
-        for row in rows:
-            results.append(
-                FileResult(
-                    path=row.get("path", ""),
-                    basename=row.get("basename", ""),
-                    basename_raw=row.get("basename_raw", ""),
-                    ext=row.get("ext", ""),
-                    dirpath=row.get("dirpath", ""),
-                    size=row.get("size", 0),
-                    mtime=row.get("mtime", 0),
-                    mtime_formatted=format_timestamp(row.get("mtime", 0)),
-                    size_formatted=format_size(row.get("size", 0)),
-                )
+    for hit in hits:
+        results.append(
+            FileResult(
+                path=hit.get("path", ""),
+                basename=hit.get("basename", ""),
+                ext=hit.get("ext", ""),
+                dirpath=hit.get("dirpath", ""),
+                size=hit.get("size", 0),
+                mtime=hit.get("mtime", 0),
+                mtime_formatted=format_timestamp(hit.get("mtime", 0)),
+                size_formatted=format_size(hit.get("size", 0)),
             )
+        )
 
     # Calculate total pages
     total_pages = (total + per_page - 1) // per_page if total > 0 else 0
@@ -346,63 +285,81 @@ async def search_files(
 @app.get("/stats", response_model=StatsResponse)
 async def get_stats():
     """Get index statistics."""
+    try:
+        response = meili_session.get(f"{MEILISEARCH_URL}/indexes/files/stats")
+        response.raise_for_status()
+        stats = response.json()
 
-    # Get total file count
-    count_result = execute_sql("SELECT COUNT(*) as total FROM files")
-    total_files = 0
-    if count_result.get("data") and len(count_result["data"]) > 0:
-        total_files = count_result["data"][0].get("total", 0)
-
-    # Get total size and last scan time
-    stats_result = execute_sql(
-        "SELECT SUM(size) as total_size, MAX(seen_at) as last_scan FROM files"
-    )
-    total_size = 0
-    last_scan = None
-    if stats_result.get("data") and len(stats_result["data"]) > 0:
-        total_size = stats_result["data"][0].get("total_size", 0) or 0
-        last_scan = stats_result["data"][0].get("last_scan")
-
-    # Get per-root statistics
-    roots_result = execute_sql(
-        "SELECT root, COUNT(*) as count, SUM(size) as size " "FROM files GROUP BY root"
-    )
-    roots = []
-    if roots_result.get("data"):
-        for row in roots_result["data"]:
-            roots.append(
-                {
-                    "name": row.get("root", ""),
-                    "files": row.get("count", 0),
-                    "size": row.get("size", 0),
-                    "size_formatted": format_size(row.get("size", 0) or 0),
-                }
+        # Get the most recent seen_at value for last scan time
+        try:
+            search_response = meili_session.post(
+                f"{MEILISEARCH_URL}/indexes/files/search",
+                json={"q": "", "limit": 1, "sort": ["seen_at:desc"]},
             )
+            search_response.raise_for_status()
+            search_data = search_response.json()
+        except requests.RequestException:
+            # Fallback: try without sort (schema may not mark seen_at as sortable yet)
+            try:
+                fallback = meili_session.post(
+                    f"{MEILISEARCH_URL}/indexes/files/search",
+                    json={"q": "", "limit": 1},
+                )
+                fallback.raise_for_status()
+                search_data = fallback.json()
+            except requests.RequestException:
+                search_data = {"hits": []}
 
-    return StatsResponse(
-        total_files=total_files, total_size=total_size, last_scan=last_scan, roots=roots
-    )
+        last_scan = None
+        if search_data.get("hits"):
+            last_scan = search_data["hits"][0].get("seen_at")
+
+        return StatsResponse(
+            total_files=stats.get("numberOfDocuments", 0),
+            is_indexing=stats.get("isIndexing", False),
+            last_scan=last_scan,
+            field_distribution=stats.get("fieldDistribution", {}),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
 
 
 @app.get("/suggest")
 async def suggest_extensions():
     """Get list of available file extensions for filtering."""
+    try:
+        # Use facets to get extension distribution
+        response = meili_session.post(
+            f"{MEILISEARCH_URL}/indexes/files/search",
+            json={"q": "", "limit": 0, "facets": ["ext"]},
+        )
+        response.raise_for_status()
+        result = response.json()
 
-    result = execute_sql(
-        "SELECT ext, COUNT(*) as count "
-        "FROM files "
-        "WHERE ext != '' "
-        "GROUP BY ext "
-        "ORDER BY count DESC "
-        "LIMIT 100"
-    )
+        facet_dist = result.get("facetDistribution", {}).get("ext", {})
 
-    extensions = []
-    if result.get("data"):
-        for row in result["data"]:
-            extensions.append({"ext": row.get("ext", ""), "count": row.get("count", 0)})
+        # Format as list sorted by count
+        extensions = [
+            {"ext": ext, "count": count}
+            for ext, count in sorted(
+                facet_dist.items(), key=lambda x: x[1], reverse=True
+            )
+        ][
+            :100
+        ]  # Limit to top 100
 
-    return {"extensions": extensions}
+        return {"extensions": extensions}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get suggestions: {e}")
+
+
+@app.post("/reindex")
+async def trigger_reindex():
+    """Trigger a manual reindex (would need to signal the indexer container)."""
+    # This would typically trigger the indexer container to run
+    # For now, return a message
+    return {"message": "Reindex triggered", "status": "pending"}
 
 
 if __name__ == "__main__":

@@ -1,2 +1,2 @@
 # Run indexer every hour at minute 5
-5 * * * * cd /app && python -u indexer.py 2>&1
+5 * * * * docker exec fs-indexer python -u /app/indexer.py 2>&1

@@ -96,7 +96,7 @@ jobs:
           version: "3.9"
           
           volumes:
-            manticore_data: {}
+            meilisearch_data: {}
             config: {}
           
           networks:
@@ -104,21 +104,21 @@ jobs:
               driver: bridge
           
           services:
-            manticore:
-              image: manticoresearch/manticore:latest
-              container_name: fs-manticore
+            meilisearch:
+              image: meilisearchsearch/meilisearch:latest
+              container_name: fs-meilisearch
               restart: unless-stopped
               ports:
-                - "\${MANTICORE_HTTP_PORT:-9308}:9308"
-                - "\${MANTICORE_MYSQL_PORT:-9306}:9306"
+                - "\${MEILISEARCH_HTTP_PORT:-7700}:7700"
+                - "\${MEILISEARCH_MYSQL_PORT:-9306}:9306"
               environment:
                 - EXTRA=1
               volumes:
-                - manticore_data:/var/lib/manticore
+                - meilisearch_data:/var/lib/meilisearch
               networks:
                 - fs-indexer
               healthcheck:
-                test: ["CMD", "curl", "-sf", "http://127.0.0.1:9308/cli?cmd=SHOW%20TABLES"]
+                test: ["CMD", "curl", "-sf", "http://127.0.0.1:7700/cli?cmd=SHOW%20TABLES"]
                 interval: 30s
                 timeout: 3s
                 retries: 10
@@ -127,10 +127,10 @@ jobs:
               image: ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/fs-indexer-indexer:${TAG}
               container_name: fs-indexer
               depends_on:
-                manticore:
+                meilisearch:
                   condition: service_healthy
               environment:
-                - MANTICORE_URL=http://manticore:9308/sql?mode=raw
+                - MEILISEARCH_URL=http://meilisearch:7700/sql?mode=raw
                 - SCAN_ROOTS=\${SCAN_ROOTS:-/data}
                 - ROOT_NAME=\${ROOT_NAME:-data}
                 - EXCLUDES_FILE=/app/config/excludes.txt
@@ -151,10 +151,10 @@ jobs:
               image: ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/fs-indexer-api:${TAG}
               container_name: fs-search-api
               depends_on:
-                manticore:
+                meilisearch:
                   condition: service_healthy
               environment:
-                - MANTICORE_URL=http://manticore:9308/sql?mode=raw
+                - MEILISEARCH_URL=http://meilisearch:7700/sql?mode=raw
                 - DEFAULT_PAGE_SIZE=\${DEFAULT_PAGE_SIZE:-50}
                 - MAX_PAGE_SIZE=\${MAX_PAGE_SIZE:-500}
                 - API_PORT=8080

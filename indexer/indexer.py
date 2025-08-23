@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Filesystem indexer for Manticore Search.
+Filesystem indexer for Meilisearch.
 Scans directories, extracts metadata, and indexes files.
 """
 
@@ -9,14 +9,12 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Dict, Any
 
 import requests
 import structlog
 import xxhash
 from tenacity import retry, stop_after_attempt, wait_exponential
-
-import urllib.parse
 
 # Configure structured logging
 structlog.configure(
@@ -42,7 +40,8 @@ logger = structlog.get_logger()
 class Config:
     """Indexer configuration from environment variables."""
 
-    manticore_url: str
+    meilisearch_url: str
+    master_key: str
     scan_roots: List[str]
     root_name: str
     excludes_file: str
@@ -54,18 +53,98 @@ class Config:
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
         return cls(
-            manticore_url=os.environ.get(
-                "MANTICORE_URL", "http://manticore:9308/sql?mode=raw"
+            meilisearch_url=os.environ.get(
+                "MEILISEARCH_URL", "http://meilisearch:7700"
             ),
+            master_key=os.environ.get("MEILI_MASTER_KEY", ""),
             scan_roots=[
                 p.strip() for p in os.environ.get("SCAN_ROOTS", "/data").split(",")
             ],
             root_name=os.environ.get("ROOT_NAME", "data"),
             excludes_file=os.environ.get("EXCLUDES_FILE", "/app/config/excludes.txt"),
             stability_sec=int(os.environ.get("STABILITY_SEC", "30")),
-            batch_size=int(os.environ.get("BATCH_SIZE", "2000")),
+            batch_size=int(os.environ.get("BATCH_SIZE", "10000")),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
+
+
+class MeilisearchClient:
+    """Simple Meilisearch client for file indexing."""
+
+    def __init__(self, url: str, master_key: str = ""):
+        self.url = url
+        self.session = requests.Session()
+        if master_key:
+            self.session.headers["Authorization"] = f"Bearer {master_key}"
+        self.session.headers["Content-Type"] = "application/json"
+        self.index_name = "files"
+
+    def wait_for_task(self, task_uid: int, timeout: int = 300) -> bool:
+        """Wait for a task to complete."""
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                response = self.session.get(f"{self.url}/tasks/{task_uid}")
+                response.raise_for_status()
+                task = response.json()
+
+                status = task.get("status")
+                if status == "succeeded":
+                    return True
+                elif status == "failed":
+                    logger.error(
+                        "task_failed", task_uid=task_uid, error=task.get("error")
+                    )
+                    return False
+
+                time.sleep(0.5)
+            except Exception as e:
+                logger.warning("task_check_error", task_uid=task_uid, error=str(e))
+                time.sleep(1)
+
+        logger.error("task_timeout", task_uid=task_uid, timeout=timeout)
+        return False
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    def add_documents(self, documents: List[Dict[str, Any]], wait: bool = False) -> int:
+        """Add or update documents in the index."""
+        response = self.session.post(
+            f"{self.url}/indexes/{self.index_name}/documents", json=documents
+        )
+        response.raise_for_status()
+
+        task_uid = response.json().get("taskUid")
+
+        if wait:
+            self.wait_for_task(task_uid)
+
+        return task_uid
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    def delete_documents(self, filter: str, wait: bool = False) -> int:
+        """Delete documents matching a filter."""
+        response = self.session.post(
+            f"{self.url}/indexes/{self.index_name}/documents/delete",
+            json={"filter": filter},
+        )
+        response.raise_for_status()
+
+        task_uid = response.json().get("taskUid")
+
+        if wait:
+            self.wait_for_task(task_uid)
+
+        return task_uid
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get index statistics."""
+        response = self.session.get(f"{self.url}/indexes/{self.index_name}/stats")
+        response.raise_for_status()
+        return response.json()
 
 
 class FileIndexer:
@@ -73,6 +152,7 @@ class FileIndexer:
 
     def __init__(self, config: Config):
         self.config = config
+        self.client = MeilisearchClient(config.meilisearch_url, config.master_key)
         self.excludes = self._load_excludes()
         self.stats = {
             "files_scanned": 0,
@@ -82,59 +162,7 @@ class FileIndexer:
             "errors": 0,
             "start_time": time.time(),
         }
-        # Ensure table exists
-        self._ensure_table_exists()
-
-    def _send_sql(self, sql: str, timeout: int = 30) -> requests.Response:
-        """
-        Send a SQL command to Manticore.  If the URL ends with /sql?mode=raw,
-        we must send the query as application/x-www-form-urlencoded.
-        Otherwise we send a JSON body (SELECT only).
-        """
-        url = self.config.manticore_url
-        if url.rstrip("/").endswith("/sql?mode=raw"):
-            data = urllib.parse.urlencode({"query": sql})
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            return requests.post(url, data=data, headers=headers, timeout=timeout)
-        else:
-            # /sql endpoint accepts JSON with `query` only for SELECT
-            return requests.post(url, json={"query": sql}, timeout=timeout)
-
-    def _ensure_table_exists(self):
-        # drop_sql = "DROP TABLE IF EXISTS files"
-        # self._send_sql(drop_sql, timeout=30)
-
-        create_sql = """
-        CREATE TABLE files (
-            id bigint,
-            root string,
-            path string stored indexed,
-            basename text stored indexed,
-            basename_raw string attribute indexed,
-            ext string,
-            dirpath string stored,
-            size bigint,
-            mtime bigint,
-            uid int,
-            gid int,
-            mode int,
-            seen_at bigint
-        ) min_infix_len='2'
-        """
-
-        try:
-            response = self._send_sql(create_sql, timeout=30)
-            if response.status_code != 200:
-                logger.warning(
-                    "table_create_response",
-                    status=response.status_code,
-                    body=response.text,
-                )
-            else:
-                logger.info("table_ensured")
-        except Exception as e:
-            logger.error("failed_to_ensure_table", error=str(e))
-            # Don't fail here, let the actual operations fail if table doesn't exist
+        self.pending_tasks = []
 
     def _load_excludes(self) -> List[str]:
         """Load exclusion patterns from file."""
@@ -166,27 +194,14 @@ class FileIndexer:
 
     def _compute_file_id(self, dev: int, ino: int) -> int:
         """Compute unique file ID from device and inode."""
-        return xxhash.xxh64_intdigest(f"{dev}:{ino}")
+        # Meilisearch needs positive integers for IDs
+        hash_val = xxhash.xxh64_intdigest(f"{dev}:{ino}")
+        # Ensure it's positive and within JavaScript's safe integer range
+        return hash_val & 0x7FFFFFFFFFFFFFFF
 
-    def _escape_sql_string(self, value: str) -> str:
+    def _scan_directory(self, root_dir: str, scan_id: int) -> Iterator[Dict[str, Any]]:
         """
-        Properly escape a string for Manticore SQL.
-        Uses backslash escaping which is more reliable for complex strings.
-        """
-        # Escape backslashes first (must be done before other escapes)
-        value = value.replace("\\", "\\\\")
-        # Escape single quotes
-        value = value.replace("'", "\\'")
-        # Escape other special characters that might cause issues
-        value = value.replace("\n", "\\n")
-        value = value.replace("\r", "\\r")
-        value = value.replace("\t", "\\t")
-        value = value.replace("\x00", "")  # Remove null bytes
-        return value
-
-    def _scan_directory(self, root_dir: str, scan_id: int) -> Iterator[Tuple]:
-        """
-        Recursively scan directory and yield file metadata.
+        Recursively scan directory and yield file documents.
         Uses iterative approach with stack to avoid deep recursion.
         """
         if not os.path.exists(root_dir):
@@ -245,21 +260,21 @@ class FileIndexer:
 
                             self.stats["files_scanned"] += 1
 
-                            yield (
-                                doc_id,
-                                self.config.root_name,
-                                entry.path,
-                                basename,
-                                basename,
-                                ext,
-                                dirpath,
-                                stat.st_size,
-                                int(stat.st_mtime),
-                                stat.st_uid,
-                                stat.st_gid,
-                                stat.st_mode,
-                                scan_id,
-                            )
+                            # Yield document for Meilisearch
+                            yield {
+                                "id": doc_id,
+                                "root": self.config.root_name,
+                                "path": entry.path,
+                                "basename": basename,
+                                "ext": ext,
+                                "dirpath": dirpath,
+                                "size": stat.st_size,
+                                "mtime": int(stat.st_mtime),
+                                "uid": stat.st_uid,
+                                "gid": stat.st_gid,
+                                "mode": stat.st_mode,
+                                "seen_at": scan_id,
+                            }
 
                         except (OSError, IOError) as e:
                             logger.warning(
@@ -273,94 +288,54 @@ class FileIndexer:
                 self.stats["errors"] += 1
                 continue
 
-    @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
-    def _bulk_upsert(self, rows: List[Tuple]) -> None:
-        """Bulk insert/update rows in Manticore."""
-        if not rows:
+    def _index_batch(self, documents: List[Dict[str, Any]]) -> None:
+        """Index a batch of documents."""
+        if not documents:
             return
 
-        # Build SQL with proper escaping using the new escape function
-        values = []
-        for row in rows:
-            escaped = [str(row[0])]  # id
-            # Escape string fields using the improved escape function
-            for i in range(1, 7):
-                val = self._escape_sql_string(str(row[i]))
-                escaped.append(f"'{val}'")
-            # Add numeric fields: the rest (size, mtime, uid, gid, mode, seen_at)
-            for i in range(7, 13):
-                escaped.append(str(row[i]))
-            values.append(f"({','.join(escaped)})")
-
-        sql = (
-            "REPLACE INTO files "
-            "(id,root,path,basename,basename_raw,ext,dirpath,size,mtime,uid,gid,mode,seen_at) "
-            f"VALUES {','.join(values)}"
-        )
-
         try:
-            # Log the query in debug mode
-            if self.config.log_level == "DEBUG":
-                logger.debug("executing_sql", sql_preview=sql[:500])
-
-            response = self._send_sql(sql, timeout=120)
-
-            # Check response and log details if error
-            if response.status_code != 200:
-                error_detail = {
-                    "status_code": response.status_code,
-                    "error_body": response.text,
-                    "sql_preview": sql[:500],
-                    "first_row": rows[0] if rows else None,
-                }
-                logger.error("manticore_sql_error", **error_detail)
-                response.raise_for_status()
-
-            self.stats["files_indexed"] += len(rows)
-            logger.info("batch_indexed", count=len(rows))
-
-        except requests.exceptions.HTTPError as e:
-            # Enhanced error logging with response body
-            error_msg = f"{str(e)}"
-            if hasattr(e.response, "text"):
-                error_msg += f" - Response: {e.response.text}"
-            logger.error("bulk_upsert_failed", error=error_msg, count=len(rows))
-            raise
+            task_uid = self.client.add_documents(documents, wait=False)
+            self.pending_tasks.append(task_uid)
+            self.stats["files_indexed"] += len(documents)
+            logger.info("batch_submitted", count=len(documents), task_uid=task_uid)
         except Exception as e:
-            logger.error("bulk_upsert_failed", error=str(e), count=len(rows))
-            raise
+            logger.error("batch_index_failed", error=str(e), count=len(documents))
+            self.stats["errors"] += 1
 
-    @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
+    def _wait_for_pending_tasks(self) -> None:
+        """Wait for all pending indexing tasks to complete."""
+        if not self.pending_tasks:
+            return
+
+        logger.info("waiting_for_tasks", count=len(self.pending_tasks))
+
+        for task_uid in self.pending_tasks:
+            if not self.client.wait_for_task(task_uid):
+                logger.error("task_failed", task_uid=task_uid)
+                self.stats["errors"] += 1
+
+        self.pending_tasks.clear()
+
     def _sweep_deletions(self, scan_id: int) -> None:
         """Remove files not seen in current scan."""
-        # Use the escape function for the root name as well
-        escaped_root = self._escape_sql_string(self.config.root_name)
-        sql = f"DELETE FROM files WHERE root='{escaped_root}' AND seen_at < {scan_id}"
-
         try:
-            response = self._send_sql(sql, timeout=600)
+            # Build filter for deletion
+            # Meilisearch filter syntax: root = "value" AND seen_at < number
+            filter_str = f'root = "{self.config.root_name}" AND seen_at < {scan_id}'
 
-            if response.status_code != 200:
-                logger.error(
-                    "deletion_sweep_error",
-                    status_code=response.status_code,
-                    error_body=response.text,
-                )
-                response.raise_for_status()
+            logger.info("starting_deletion_sweep", filter=filter_str)
 
-            # Parse response to get deleted count
-            result = response.json()
-            if "data" in result and len(result["data"]) > 0:
-                deleted = result["data"][0].get("deleted", 0)
-                self.stats["files_deleted"] = deleted
-                logger.info("deletion_sweep_complete", deleted=deleted)
+            task_uid = self.client.delete_documents(filter_str, wait=True)
+
+            # Get stats to see how many were deleted
+            # Note: Meilisearch doesn't return deletion count directly
+            # You'd need to track this differently if exact count is needed
+
+            logger.info("deletion_sweep_complete", task_uid=task_uid)
+
         except Exception as e:
             logger.error("deletion_sweep_failed", error=str(e))
-            raise
+            self.stats["errors"] += 1
 
     def run(self) -> None:
         """Main indexing loop."""
@@ -372,19 +347,33 @@ class FileIndexer:
         for root_dir in self.config.scan_roots:
             logger.info("scanning_root", root=root_dir)
 
-            for file_row in self._scan_directory(root_dir, scan_id):
-                batch.append(file_row)
+            for document in self._scan_directory(root_dir, scan_id):
+                batch.append(document)
 
                 if len(batch) >= self.config.batch_size:
-                    self._bulk_upsert(batch)
+                    self._index_batch(batch)
                     batch.clear()
 
         # Index remaining files
         if batch:
-            self._bulk_upsert(batch)
+            self._index_batch(batch)
+
+        # Wait for all indexing tasks to complete
+        self._wait_for_pending_tasks()
 
         # Remove deleted files
         self._sweep_deletions(scan_id)
+
+        # Get final stats from Meilisearch
+        try:
+            index_stats = self.client.get_stats()
+            logger.info(
+                "index_stats",
+                total_documents=index_stats.get("numberOfDocuments"),
+                is_indexing=index_stats.get("isIndexing"),
+            )
+        except Exception as e:
+            logger.warning("failed_to_get_stats", error=str(e))
 
         # Log statistics
         elapsed = time.time() - self.stats["start_time"]
@@ -395,7 +384,6 @@ class FileIndexer:
             files_scanned=self.stats["files_scanned"],
             files_indexed=self.stats["files_indexed"],
             files_skipped=self.stats["files_skipped"],
-            files_deleted=self.stats["files_deleted"],
             errors=self.stats["errors"],
             files_per_sec=(
                 round(self.stats["files_scanned"] / elapsed, 2) if elapsed > 0 else 0

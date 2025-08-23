@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, meili, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, meili ]
   workflow_dispatch:
 
 env:
@@ -191,11 +191,19 @@ jobs:
           
           # Create test config
           cp .env.example .env.test
+          # Ensure trailing newline before appending to avoid concatenation with last line
+          echo "" >> .env.test
           echo "HOST_PATH=$(pwd)/tests/integration/test_data" >> .env.test
-          echo "MANTICORE_DATA_PATH=/tmp/manticore_test" >> .env.test
+          echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_test" >> .env.test
           
-          # Create Manticore data directory
-          mkdir -p /tmp/manticore_test
+          # Create Meilisearch data directory
+          mkdir -p /tmp/meilisearch_test
+
+      - name: Prepare Meilisearch data dir
+        run: |
+          mkdir -p data/meilisearch
+          # ensure it is completely empty (also removes any .gitkeep if present)
+          find data/meilisearch -mindepth 1 -delete
 
       - name: Start services
         run: |
@@ -207,11 +215,11 @@ jobs:
       - name: Run integration tests
         run: |
           # Wait for services to be ready
-          timeout 240 bash -c 'until curl -sf http://localhost:9308/cli?cmd=SHOW%20TABLES; do sleep 2; done'
+          timeout 240 bash -c 'until curl -sf http://localhost:7700/health; do sleep 2; done'
           timeout 240 bash -c 'until curl -sf http://localhost:8080/health; do sleep 2; done'
           
           # Run indexer
-          docker compose -f docker-compose.test.yml run --rm indexer
+          docker compose -f docker-compose.test.yml run --no-deps --rm indexer
           
           # Test search API
           curl -sf http://localhost:8080/search?q=test | jq .
@@ -230,8 +238,11 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          docker compose -f docker-compose.test.yml down -v
-          rm -rf /tmp/manticore_test
+          docker compose -f docker-compose.test.yml down -v || true
+          # Relax permissions then remove
+          sudo chown -R $USER:$USER /tmp/meilisearch_test 2>/dev/null || true
+          sudo chmod -R u+rwX /tmp/meilisearch_test 2>/dev/null || true
+          sudo rm -rf /tmp/meilisearch_test || true
 
   # Security scanning
   security-scan:
@@ -300,22 +311,71 @@ jobs:
           done
           
           cp .env.example .env.e2e
+          # Ensure newline so appended vars don't merge with final line
+          echo "" >> .env.e2e
           echo "HOST_PATH=$(pwd)/tests/e2e/test_data" >> .env.e2e
-          echo "MANTICORE_DATA_PATH=/tmp/manticore_e2e" >> .env.e2e
-          mkdir -p /tmp/manticore_e2e
+          echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_e2e" >> .env.e2e
+          mkdir -p /tmp/meilisearch_e2e
+
+      - name: Prepare Meilisearch data dir
+        run: |
+          mkdir -p data/meilisearch
+          # ensure it is completely empty (also removes any .gitkeep if present)
+          find data/meilisearch -mindepth 1 -delete
 
       - name: Start full stack
         run: |
-          docker compose --env-file .env.e2e -f docker-compose.test.yml up -d
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml up -d
           sleep 15
+          echo "--- docker compose ps (initial) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml ps
+          echo "--- bootstrap logs (initial) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs bootstrap || true
+          echo "--- meilisearch logs (initial) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs meilisearch || true
+
+      - name: Verify bootstrap success before tests
+        run: |
+          set -e
+          CID=$(docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml ps -q bootstrap || true)
+          if [ -z "$CID" ]; then
+            echo "Bootstrap container ID not found (likely exited quickly). Inferring status via dependent services...";
+            # If search-api (which depends on bootstrap success) is up, treat as success
+            SA_STATUS=$(docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml ps --format '{{.Service}} {{.Status}}' 2>/dev/null | grep '^search-api ' || true)
+            if [ -n "$SA_STATUS" ]; then
+              echo "search-api present ($SA_STATUS) -> bootstrap assumed successful";
+              exit 0
+            fi
+            echo "Dependent service not running; dumping compose ps and failing.";
+            docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml ps
+            exit 1
+          fi
+          STATUS=$(docker inspect -f '{{.State.Status}}' "$CID")
+          EXITCODE=$(docker inspect -f '{{.State.ExitCode}}' "$CID")
+          echo "Bootstrap status=$STATUS exitCode=$EXITCODE"
+          if [ "$STATUS" = "exited" ] && [ "$EXITCODE" -ne 0 ]; then
+            echo "Bootstrap exited with failure. Logs:";
+            docker logs "$CID" || true
+            docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs meilisearch || true
+            exit 1
+          fi
 
       - name: Run E2E tests
         run: |
           chmod +x tests/e2e/test_e2e.sh
           ENV_FILE=.env.e2e ./tests/e2e/test_e2e.sh
 
+      - name: Collect service logs on failure (E2E)
+        if: failure()
+        run: |
+          echo "--- Full service logs (failure) ---"
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml logs || true
+
       - name: Clean up
         if: always()
         run: |
-          docker compose -f docker-compose.test.yml down -v
-          rm -rf /tmp/manticore_e2e tests/e2e/test_data
+          docker compose --env-file .env.e2e -f docker-compose.test.yml -f docker-compose.e2e.override.yml down -v || true
+            # Adjust ownership/permissions to allow deletion (Meilisearch may create root-owned 600 files)
+          sudo chown -R $USER:$USER /tmp/meilisearch_e2e 2>/dev/null || true
+          sudo chmod -R u+rwX /tmp/meilisearch_e2e 2>/dev/null || true
+          sudo rm -rf /tmp/meilisearch_e2e tests/e2e/test_data || true
