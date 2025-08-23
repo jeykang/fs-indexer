@@ -90,7 +90,7 @@ def create_index(base_url: str) -> bool:
         )
         task_uid = response.get("taskUid")
 
-        if task_uid and wait_for_task(base_url, task_uid):
+        if task_uid is not None and wait_for_task(base_url, int(task_uid)):
             print("✓ Index created successfully")
             return True
 
@@ -168,7 +168,7 @@ def configure_index(base_url: str) -> bool:
         )
         task_uid = response.get("taskUid")
 
-        if task_uid and wait_for_task(base_url, task_uid, timeout=120):
+        if task_uid is not None and wait_for_task(base_url, int(task_uid), timeout=120):
             print("✓ Index settings configured")
             return True
 
