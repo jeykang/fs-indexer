@@ -192,10 +192,10 @@ jobs:
           # Create test config
           cp .env.example .env.test
           echo "HOST_PATH=$(pwd)/tests/integration/test_data" >> .env.test
-          echo "MANTICORE_DATA_PATH=/tmp/manticore_test" >> .env.test
+          echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_test" >> .env.test
           
-          # Create Manticore data directory
-          mkdir -p /tmp/manticore_test
+          # Create Meilisearch data directory
+          mkdir -p /tmp/meilisearch_test
 
       - name: Start services
         run: |
@@ -231,7 +231,7 @@ jobs:
         if: always()
         run: |
           docker compose -f docker-compose.test.yml down -v
-          rm -rf /tmp/manticore_test
+          rm -rf /tmp/meilisearch_test
 
   # Security scanning
   security-scan:
@@ -301,8 +301,8 @@ jobs:
           
           cp .env.example .env.e2e
           echo "HOST_PATH=$(pwd)/tests/e2e/test_data" >> .env.e2e
-          echo "MANTICORE_DATA_PATH=/tmp/manticore_e2e" >> .env.e2e
-          mkdir -p /tmp/manticore_e2e
+          echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_e2e" >> .env.e2e
+          mkdir -p /tmp/meilisearch_e2e
 
       - name: Start full stack
         run: |
@@ -318,4 +318,4 @@ jobs:
         if: always()
         run: |
           docker compose -f docker-compose.test.yml down -v
-          rm -rf /tmp/manticore_e2e tests/e2e/test_data
+          rm -rf /tmp/meilisearch_e2e tests/e2e/test_data
