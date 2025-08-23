@@ -191,6 +191,8 @@ jobs:
           
           # Create test config
           cp .env.example .env.test
+          # Ensure trailing newline before appending to avoid concatenation with last line
+          echo "" >> .env.test
           echo "HOST_PATH=$(pwd)/tests/integration/test_data" >> .env.test
           echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_test" >> .env.test
           
@@ -306,6 +308,8 @@ jobs:
           done
           
           cp .env.example .env.e2e
+          # Ensure newline so appended vars don't merge with final line
+          echo "" >> .env.e2e
           echo "HOST_PATH=$(pwd)/tests/e2e/test_data" >> .env.e2e
           echo "MEILISEARCH_DATA_PATH=/tmp/meilisearch_e2e" >> .env.e2e
           mkdir -p /tmp/meilisearch_e2e
