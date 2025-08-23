@@ -17,7 +17,7 @@ echo "API is ready"
 
 # Run indexer
 echo "Running indexer..."
-docker compose --env-file ${ENV_FILE} -f docker-compose.test.yml run --rm indexer
+docker compose --env-file ${ENV_FILE} -f docker-compose.test.yml run --no-deps --rm indexer
 
 # Wait for Meilisearch to finish indexing
 echo "Waiting for indexing to complete..."

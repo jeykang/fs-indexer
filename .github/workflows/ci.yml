@@ -217,7 +217,7 @@ jobs:
           timeout 240 bash -c 'until curl -sf http://localhost:8080/health; do sleep 2; done'
           
           # Run indexer
-          docker compose -f docker-compose.test.yml run --rm indexer
+          docker compose -f docker-compose.test.yml run --no-deps --rm indexer
           
           # Test search API
           curl -sf http://localhost:8080/search?q=test | jq .
